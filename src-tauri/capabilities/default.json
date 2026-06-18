@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Default capability for the photobooth app",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "http:default",
+    "dialog:default",
+    "fs:default"
+  ]
+}

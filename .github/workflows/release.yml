@@ -1,0 +1,82 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*" # v1.0.0, v1.1.0, …
+  workflow_dispatch: # manual trigger
+
+jobs:
+  build:
+    name: Build macOS App
+    runs-on: macos-latest # Apple Silicon (arm64); use macos-13 for Intel x86_64
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Rust toolchain ──────────────────────────────────────────
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      # ── Node.js ─────────────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # ── Swift camera helper ─────────────────────────────────────
+      - name: Build Swift camera helper
+        run: |
+          cd src-tauri/ios_camera_stream
+          swift build -c release
+          SWIFT_BIN=$(swift build -c release --show-bin-path 2>/dev/null)
+          echo "Swift binary at: $SWIFT_BIN/ios_camera_stream"
+          cp "$SWIFT_BIN/ios_camera_stream" ../resources/ios_camera_stream
+          chmod +x ../resources/ios_camera_stream
+
+      # ── Frontend ─────────────────────────────────────────────────
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      # ── Tauri build (macOS .app + .dmg) ─────────────────────────
+      - name: Build Tauri app
+        run: npx tauri build 2>&1
+        env:
+          # Optional code signing — omit secrets or set to "" to skip
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      # ── Package .app.zip for OTA updates ────────────────────────
+      - name: Package .app.zip for OTA updates
+        run: |
+          APP="photobooth.app"
+          BUNDLE_DIR="src-tauri/target/release/bundle/macos"
+          if [ ! -d "$BUNDLE_DIR/$APP" ]; then
+            echo "ERROR: .app bundle not found at $BUNDLE_DIR/$APP"
+            ls -la "$BUNDLE_DIR" 2>/dev/null || echo "(bundle dir missing)"
+            exit 1
+          fi
+          cd "$BUNDLE_DIR"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "${APP}.zip"
+          ls -lh "${APP}.zip"
+          echo "--- Bundle contents ---"
+          ls -lh
+
+      # ── Create GitHub Release ───────────────────────────────────
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            src-tauri/target/release/bundle/macos/*.dmg
+            src-tauri/target/release/bundle/macos/photobooth.app.zip

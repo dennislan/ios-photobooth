@@ -4,5 +4,5 @@
 )]
 
 fn main() {
-    android_photobooth_lib::main();
+    photobooth_lib::main();
 }

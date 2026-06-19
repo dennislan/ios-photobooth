@@ -1,9 +1,11 @@
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
+import Antd from 'ant-design-vue';
 import App from './App.vue';
-import './styles/main.css';
+import './styles/tailwind.css';
 
-// 在 Tauri 环境中，确保全局错误处理
+// In Tauri environment, ensure global error handling
 const app = createApp(App);
 app.use(createPinia());
+app.use(Antd);
 app.mount('#app');

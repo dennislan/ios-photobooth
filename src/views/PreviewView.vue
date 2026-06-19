@@ -1,347 +1,310 @@
 <template>
-  <div class="preview-view">
-    <div class="preview-header">
-      <h2>预览与打印</h2>
-      <button class="btn btn-secondary back-btn" @click="$emit('back')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon-svg">
-          <polyline points="15 18 9 12 15 6"/>
-        </svg>
+  <div class="flex flex-col h-full">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-6 py-3 bg-white border-b border-border-color">
+      <h2 class="text-lg font-semibold m-0">预览与打印</h2>
+      <a-button @click="$emit('back')">
+        <template #icon><ArrowLeftOutlined /></template>
         返回
-      </button>
+      </a-button>
     </div>
 
-    <div class="preview-content">
+    <!-- Content -->
+    <div class="flex-1 flex gap-6 p-6 overflow-hidden">
       <!-- 预览区域 -->
-      <div class="preview-area">
-        <div v-if="selectedPhotos.length === 0" class="empty-state">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-icon">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-            <circle cx="8.5" cy="8.5" r="1.5"/>
-            <polyline points="21 15 16 10 5 21"/>
-          </svg>
-          <p>请先选择照片</p>
-        </div>
-        
-        <div v-else class="preview-canvas-wrapper">
-          <canvas ref="canvasRef" class="preview-canvas"></canvas>
-          <div class="preview-actions">
-            <button class="btn btn-secondary" @click="resetZoom">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon-svg">
-                <circle cx="11" cy="11" r="8"/>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                <line x1="11" y1="8" x2="11" y2="14"/>
-                <line x1="8" y1="11" x2="14" y2="11"/>
-              </svg>
-              重置缩放
-            </button>
+      <div class="flex-1 flex flex-col">
+        <a-empty
+          v-if="layoutPhotos.length === 0"
+          description="请先选择照片"
+          class="!flex !items-center !justify-center !h-full"
+        />
+        <div v-else class="flex-1 flex flex-col bg-white rounded-lg border border-border-color overflow-hidden">
+          <div class="flex-1 flex items-center justify-center p-4 overflow-hidden">
+            <canvas ref="canvasRef" class="max-w-full max-h-full object-contain shadow-lg rounded"></canvas>
+          </div>
+          <div class="p-3 border-t border-border-color flex items-center gap-3">
+            <span class="text-sm text-text-secondary">模板: {{ currentTemplateName }}</span>
+            <span class="text-sm text-text-secondary">|</span>
+            <span class="text-sm text-text-secondary">滤镜: {{ filterLabel }}</span>
+            <span class="text-sm text-text-secondary">|</span>
+            <span class="text-sm text-text-secondary">{{ layoutPhotos.length }} 张照片</span>
           </div>
         </div>
       </div>
 
       <!-- 打印选项 -->
-      <div class="print-options">
-        <h3 class="section-title">打印设置</h3>
-        <div class="options-grid">
-          <div class="option-item">
-            <label>纸张大小</label>
-            <select v-model="paperSize" class="select">
-              <option value="4x6">4x6 英寸</option>
-              <option value="5x7">5x7 英寸</option>
-              <option value="6x8">6x8 英寸</option>
-            </select>
-          </div>
-          <div class="option-item">
-            <label>打印模式</label>
-            <select v-model="printMode" class="select">
-              <option value="color">彩色</option>
-              <option value="bw">黑白</option>
-            </select>
-          </div>
-          <div class="option-item">
-            <label>份数</label>
-            <input type="number" v-model.number="copies" min="1" max="10" class="input" />
-          </div>
-        </div>
-      </div>
+      <a-card title="打印设置" :bordered="false" class="w-[300px] flex-shrink-0">
+        <a-form layout="vertical">
+          <a-form-item label="纸张大小">
+            <a-select v-model:value="captureStore.paperSize">
+              <a-select-option value="4x6">4x6 英寸</a-select-option>
+              <a-select-option value="5x7">5x7 英寸</a-select-option>
+              <a-select-option value="6x8">6x8 英寸</a-select-option>
+              <a-select-option value="A4">A4</a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="打印模式">
+            <a-select v-model:value="captureStore.printMode">
+              <a-select-option value="color">彩色</a-select-option>
+              <a-select-option value="bw">黑白</a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="份数">
+            <a-input-number v-model:value="captureStore.copies" :min="1" :max="20" style="width: 100%;" />
+          </a-form-item>
+          <a-divider style="margin: 8px 0;" />
+          <a-form-item label="滤镜调整">
+            <a-select :value="captureStore.filter" @change="(v: any) => captureStore.setFilter(v)">
+              <a-select-option v-for="f in filterOptions" :key="f" :value="f">{{ FILTER_LABELS[f] }}</a-select-option>
+            </a-select>
+          </a-form-item>
+        </a-form>
+      </a-card>
     </div>
 
-    <div class="preview-footer">
-      <button class="btn btn-success print-btn" @click="printImage" :disabled="printing">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon-svg">
-          <polyline points="6 9 6 2 18 2 18 9"/>
-          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-          <rect x="6" y="14" width="12" height="8"/>
-        </svg>
+    <!-- Footer -->
+    <div class="px-6 py-4 bg-white border-t border-border-color flex gap-3">
+      <a-button
+        type="primary"
+        size="large"
+        :loading="printing"
+        class="flex-1 !py-3.5 !text-base"
+        style="background: #34C759; border-color: #34C759;"
+        @click="printImage"
+      >
+        <template #icon><PrinterOutlined /></template>
         {{ printing ? '打印中...' : '打印照片' }}
-      </button>
-      <button class="btn btn-secondary download-btn" @click="downloadImage">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon-svg">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>
+      </a-button>
+      <a-button
+        size="large"
+        class="flex-1 !py-3.5 !text-base"
+        :loading="downloading"
+        @click="downloadImage"
+      >
+        <template #icon><DownloadOutlined /></template>
         下载
-      </button>
+      </a-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
-import { useCaptureStore } from '../stores/capture';
+import {
+  ArrowLeftOutlined,
+  PrinterOutlined,
+  DownloadOutlined,
+} from "@ant-design/icons-vue"
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import {
+  useCaptureStore,
+  FILTER_CSS,
+  FILTER_LABELS,
+  TEMPLATES,
+  type FilterType,
+} from '../stores/capture'
 
 defineEmits<{
-  back: [];
-}>();
+  back: []
+}>()
 
-const captureStore = useCaptureStore();
-const canvasRef = ref<HTMLCanvasElement | null>(null);
-const paperSize = ref('4x6');
-const printMode = ref('color');
-const copies = ref(1);
-const printing = ref(false);
+const captureStore = useCaptureStore()
+const canvasRef = ref<HTMLCanvasElement | null>(null)
+const printing = ref(false)
+const downloading = ref(false)
 
-const selectedPhotos = computed(() => captureStore.photos);
+const filterOptions = Object.keys(FILTER_LABELS) as FilterType[]
+
+const layoutPhotos = computed(() => captureStore.photosForLayout)
+const filterLabel = computed(() => FILTER_LABELS[captureStore.filter])
+
+const currentTemplateName = computed(() => {
+  const tpl = TEMPLATES.find((t) => t.id === captureStore.templateId)
+  return tpl ? tpl.name : '默认'
+})
+
+// 画布尺寸（高分辨率，用于打印）
+function canvasDimensions(): { w: number; h: number } {
+  switch (captureStore.templateId) {
+    case 'single':
+      return { w: 1200, h: 1800 }
+    case 'strip':
+      return { w: 900, h: 1800 }
+    case 'grid4':
+    default:
+      return { w: 1200, h: 1800 }
+  }
+}
 
 onMounted(() => {
-  renderPreview();
-});
+  nextTick(() => renderPreview())
+})
 
-watch([selectedPhotos], () => {
-  renderPreview();
-});
+watch(
+  [layoutPhotos, () => captureStore.filter, () => captureStore.templateId],
+  () => {
+    nextTick(() => renderPreview())
+  }
+)
 
-function renderPreview() {
-  const canvas = canvasRef.value;
-  if (!canvas) return;
-  
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  
-  canvas.width = 800;
-  canvas.height = 600;
-  
-  // Background
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
-  // Render photos
-  selectedPhotos.value.forEach((photo, idx) => {
-    const img = new Image();
-    img.onload = () => {
-      // Simple grid layout
-      const cols = 2;
-      const rows = Math.ceil(selectedPhotos.value.length / cols);
-      const cellWidth = canvas.width / cols;
-      const cellHeight = canvas.height / rows;
-      const x = (idx % cols) * cellWidth;
-      const y = Math.floor(idx / cols) * cellHeight;
-      
-      // Cover fit
-      const scale = Math.max(cellWidth / img.width, cellHeight / img.height);
-      const dw = img.width * scale;
-      const dh = img.height * scale;
-      const dx = x + (cellWidth - dw) / 2;
-      const dy = y + (cellHeight - dh) / 2;
-      
-      ctx.drawImage(img, dx, dy, dw, dh);
-    };
-    img.src = photo.dataUrl;
-  });
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => resolve(img)
+    img.onerror = reject
+    img.src = src
+  })
+}
+
+async function renderPreview() {
+  const canvas = canvasRef.value
+  if (!canvas || layoutPhotos.value.length === 0) return
+
+  const { w, h } = canvasDimensions()
+  canvas.width = w
+  canvas.height = h
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  // 背景
+  ctx.fillStyle = '#FFFFFF'
+  ctx.fillRect(0, 0, w, h)
+
+  // 应用滤镜
+  const filterCss = FILTER_CSS[captureStore.filter]
+  ctx.filter = filterCss === 'none' ? 'none' : filterCss
+
+  const template = TEMPLATES.find((t) => t.id === captureStore.templateId)
+  const cols = template?.cols ?? 2
+  const rows = template?.rows ?? 2
+  const padding = 40
+  const gap = 20
+
+  const cellW = (w - padding * 2 - gap * (cols - 1)) / cols
+  const cellH = (h - padding * 2 - gap * (rows - 1)) / rows
+
+  // 加载所有照片
+  const images: HTMLImageElement[] = []
+  for (const photo of layoutPhotos.value) {
+    try {
+      const img = await loadImage(photo.dataUrl)
+      images.push(img)
+    } catch {
+      // 跳过加载失败的
+    }
+  }
+
+  // 绘制每张照片 (object-fit: cover)
+  images.forEach((img, idx) => {
+    if (idx >= cols * rows) return
+    const col = idx % cols
+    const row = Math.floor(idx / cols)
+    const x = padding + col * (cellW + gap)
+    const y = padding + row * (cellH + gap)
+
+    // cover 算法
+    const imgRatio = img.width / img.height
+    const cellRatio = cellW / cellH
+    let dw: number, dh: number
+    if (imgRatio > cellRatio) {
+      dh = cellH
+      dw = cellH * imgRatio
+    } else {
+      dw = cellW
+      dh = cellW / imgRatio
+    }
+    const dx = x + (cellW - dw) / 2
+    const dy = y + (cellH - dh) / 2
+
+    ctx.save()
+    // 裁剪到单元格
+    ctx.beginPath()
+    ctx.rect(x, y, cellW, cellH)
+    ctx.clip()
+    ctx.drawImage(img, dx, dy, dw, dh)
+    ctx.restore()
+  })
+
+  // 重置滤镜
+  ctx.filter = 'none'
+}
+
+async function canvasToBlob(quality = 0.92): Promise<Blob | null> {
+  const canvas = canvasRef.value
+  if (!canvas) return null
+  return new Promise((resolve) => {
+    canvas.toBlob(resolve, 'image/jpeg', quality)
+  })
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
 }
 
 async function printImage() {
-  printing.value = true;
+  if (layoutPhotos.value.length === 0) {
+    alert('请先选择照片')
+    return
+  }
+  printing.value = true
   try {
-    const { invoke } = await import('@tauri-apps/api/core');
+    const { invoke } = await import('@tauri-apps/api/core')
+    const blob = await canvasToBlob(0.92)
+    if (!blob) {
+      alert('图片生成失败')
+      return
+    }
+    const base64 = await blobToBase64(blob)
+    const imagePath: string = await invoke('save_temp_image', { data: base64, ext: 'jpg' })
     await invoke('print_image', {
-      filePath: '',
-      copies: copies.value,
-      colorMode: printMode.value,
-    });
-    alert('打印成功！');
+      imagePath,
+      paperSize: captureStore.paperSize,
+      colorMode: captureStore.printMode,
+      copies: captureStore.copies,
+    })
+    alert(`打印成功！已发送 ${captureStore.copies} 份到打印机`)
   } catch (e) {
-    alert(e instanceof Error ? e.message : String(e));
+    alert(e instanceof Error ? e.message : String(e))
   } finally {
-    printing.value = false;
+    printing.value = false
   }
 }
 
 async function downloadImage() {
-  try {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    
-    const selectedPath = await save({
-      filters: [{ name: 'PNG', extensions: ['png'] }],
-    });
-    
-    if (selectedPath) {
-      const canvas = canvasRef.value;
-      if (canvas) {
-        const blob = await new Promise<Blob | null>((resolve) => {
-          canvas.toBlob(resolve, 'image/png');
-        });
-        
-        if (blob) {
-          alert(`图片已准备下载: ${selectedPath}`);
-        }
-      }
-    }
-  } catch (e) {
-    alert(e instanceof Error ? e.message : String(e));
+  if (layoutPhotos.value.length === 0) {
+    alert('请先选择照片')
+    return
   }
-}
+  downloading.value = true
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const { save } = await import('@tauri-apps/plugin-dialog')
 
-function resetZoom() {
-  renderPreview();
+    const selectedPath = await save({
+      defaultPath: `photobooth_${Date.now()}.jpg`,
+      filters: [{ name: 'JPEG', extensions: ['jpg'] }],
+    })
+
+    if (!selectedPath) return
+
+    const blob = await canvasToBlob(0.95)
+    if (!blob) {
+      alert('图片生成失败')
+      return
+    }
+    const base64 = await blobToBase64(blob)
+    await invoke('write_image_file', { path: selectedPath, data: base64 })
+    alert(`已保存到: ${selectedPath}`)
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e))
+  } finally {
+    downloading.value = false
+  }
 }
 </script>
-
-<style scoped>
-.preview-view {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.preview-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  background: white;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.preview-header h2 {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.back-btn {
-  min-height: 40px;
-}
-
-.btn-icon-svg {
-  width: 16px;
-  height: 16px;
-}
-
-.preview-content {
-  flex: 1;
-  display: flex;
-  gap: 24px;
-  padding: 24px;
-  overflow: hidden;
-}
-
-.preview-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.empty-state {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-tertiary);
-}
-
-.empty-icon {
-  width: 64px;
-  height: 64px;
-  margin-bottom: 16px;
-}
-
-.preview-canvas-wrapper {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  background: white;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-color);
-  overflow: hidden;
-}
-
-.preview-canvas {
-  flex: 1;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.preview-actions {
-  padding: 12px;
-  border-top: 1px solid var(--border-color);
-}
-
-.print-options {
-  width: 300px;
-  background: white;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-color);
-  padding: 20px;
-  overflow-y: auto;
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 16px;
-}
-
-.options-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.option-item label {
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
-
-.option-item .input,
-.option-item .select {
-  width: 100%;
-  padding: 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  font-size: 14px;
-  background: white;
-}
-
-.preview-footer {
-  display: flex;
-  gap: 12px;
-  padding: 16px 24px;
-  background: white;
-  border-top: 1px solid var(--border-color);
-}
-
-.print-btn,
-.download-btn {
-  flex: 1;
-  padding: 14px;
-  font-size: 16px;
-  min-height: 48px;
-}
-
-@media (max-width: 768px) {
-  .preview-content {
-    flex-direction: column;
-  }
-  
-  .print-options {
-    width: 100%;
-  }
-}
-</style>

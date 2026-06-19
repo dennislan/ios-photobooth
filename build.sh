@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build.sh — 一键构建 vivo-photobooth 应用
+# build.sh — 一键构建 photobooth 应用
 # 用法: ./build.sh [--release|--debug]
 set -euo pipefail
 
@@ -24,7 +24,7 @@ cd "$ROOT"
 
 # ── 前置检查 ──────────────────────────────────────────
 info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-info "  vivo-photobooth $BUILD_MODE Build"
+info "  photobooth $BUILD_MODE Build"
 info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 

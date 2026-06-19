@@ -5,23 +5,25 @@ use std::process::Command;
 use std::time::Duration;
 use tokio::task;
 
-/// 检测照片是否为 Motion Photo / Live Photo
+/// 检测照片是否为 Live Photo (iOS 导出为 .jpg + 同名 .mov)
 pub async fn is_motion_photo(filename: &str) -> Result<bool, String> {
-    if filename.contains("MVIMG") {
-        return Ok(true);
-    }
-    let stem = filename.trim_end_matches(".jpg");
-    let mp4_path = format!("{}.mp4", stem);
-    Ok(std::path::Path::new(&mp4_path).exists())
+    // iOS Live Photo: photo file has a companion .mov with the same stem
+    let stem = filename
+        .trim_end_matches(".jpg")
+        .trim_end_matches(".heic")
+        .trim_end_matches(".JPG")
+        .trim_end_matches(".HEIC");
+    let mov_path = format!("{}.mov", stem);
+    Ok(std::path::Path::new(&mov_path).exists())
 }
 
 /// 获取照片信息
 pub async fn get_photo_info(filename: &str) -> Result<serde_json::Value, String> {
-    let ffmpeg = crate::utils::find_executable("ffmpeg")
-        .unwrap_or_else(|| "ffmpeg".to_string());
+    let ffprobe = crate::utils::find_executable("ffprobe")
+        .unwrap_or_else(|| "ffprobe".to_string());
 
     let output = task::block_in_place(|| -> Result<std::process::Output, String> {
-        Command::new(&ffmpeg)
+        Command::new(&ffprobe)
             .args(&["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", filename])
             .output()
             .map_err(|e| format!("Failed to run ffprobe: {}", e))

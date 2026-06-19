@@ -1,2 +1,4 @@
 node_modules
 src-tauri/target/
+src-tauri/ios_camera_stream/.build
+src-tauri/gen/assets/

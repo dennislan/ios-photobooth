@@ -1,13 +1,13 @@
 // Deep Link 协议与单实例保护
-// URL Scheme: android-photo://callback?{params}
+// URL Scheme: photobooth://callback?{params}
 
 /// 从 Deep Link URL 解析参数
 pub fn parse_deep_link(url: &str) -> Option<DeepLinkParams> {
-    if !url.starts_with("android-photo://") {
+    if !url.starts_with("photobooth://") {
         return None;
     }
 
-    let query = &url["android-photo://".len()..];
+    let query = &url["photobooth://".len()..];
     let mut params = DeepLinkParams::default();
 
     for pair in query.split('&') {
@@ -44,18 +44,15 @@ fn url_decode(s: &str) -> String {
         .replace("%2B", "+")
 }
 
-/// 注册 android-photo:// URL Scheme
+/// 注册 photobooth:// URL Scheme
 #[cfg(target_os = "macos")]
 pub fn register_scheme(_app: &tauri::AppHandle) -> Result<(), String> {
-    // macOS URL Scheme 通过 Info.plist 自动注册
     println!("URL scheme registered via Info.plist on macOS");
     Ok(())
 }
 
-/// 在 Windows 上注册 URL Scheme 的注册表项
 #[cfg(target_os = "windows")]
 pub fn register_scheme(_app: &tauri::AppHandle) -> Result<(), String> {
-    // Windows URL Scheme 通过 installer 注册
     println!("URL scheme registration handled by installer on Windows");
     Ok(())
 }

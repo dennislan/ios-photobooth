@@ -1,229 +1,183 @@
 <template>
-  <div class="capture-view">
-    <!-- 投屏区域 -->
-    <div class="mirror-container">
-      <div v-if="!isScrcpyRunning" class="mirror-placeholder">
-        <div class="placeholder-icon">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-          >
-            <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
-            <line x1="12" y1="18" x2="12.01" y2="18" />
-          </svg>
+  <div class="flex flex-col h-full gap-4 p-4">
+    <!-- 预览区域 -->
+    <a-card :bordered="false" class="flex-1 !mb-0">
+      <template #default>
+        <div v-if="!isCameraRunning" class="flex flex-col items-center justify-center h-full min-h-[400px] text-center">
+          <a-empty description="连接 iPhone" class="!justify-start">
+            <template #description>
+              <div>
+                <p class="text-lg font-medium text-text-primary mb-2">连接 iPhone</p>
+                <div v-if="deviceId" class="inline-flex items-center gap-2 px-3 py-2 rounded-full bg-[rgba(0,122,255,0.1)] text-sm font-medium mb-4">
+                  <CheckCircleOutlined />
+                  设备: {{ deviceId }}
+                </div>
+                <br>
+                <a-button type="primary" size="large" @click="startCamera">
+                  <template #icon>
+                    <ScanOutlined />
+                  </template>
+                  连接手机
+                </a-button>
+              </div>
+            </template>
+          </a-empty>
         </div>
-        <p class="placeholder-title">连接 android 手机</p>
-        <p class="placeholder-desc">请启用 USB 调试模式</p>
-        <div class="device-status" v-if="deviceId">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            class="status-icon"
-          >
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-            <polyline points="22 4 12 14.01 9 11.01" />
-          </svg>
-          设备: {{ deviceId }}
-        </div>
-        <button class="btn btn-primary connect-btn" @click="startScrcpy">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            class="btn-icon-svg"
-          >
-            <path d="M5 12h14M12 5l7 7-7 7" />
-          </svg>
-          连接手机
-        </button>
-      </div>
-      <video
-        v-else
-        ref="videoEl"
-        class="mirror-video"
-        autoplay
-        muted
-        playsinline
-        aria-label="手机投屏画面"
-      />
-      <div class="scrcpy-badge" v-if="isScrcpyRunning">
-        <span class="status-dot active"></span>
-        投屏中
-      </div>
+        <img
+          v-else
+          :src="mjpegUrl"
+          class="w-full h-full object-contain"
+          :style="{ filter: previewFilter }"
+          alt="iPhone 相机预览"
+        />
+      </template>
+      <template #extra v-if="isCameraRunning">
+        <a-badge status="processing" text="预览中" />
+      </template>
+    </a-card>
+
+    <!-- 模板选择 -->
+    <div class="flex items-center gap-3">
+      <span class="text-sm font-medium text-text-secondary flex-shrink-0">模板</span>
+      <a-radio-group :value="captureStore.templateId" button-style="solid" @change="(e: any) => captureStore.setTemplate(e.target.value)">
+        <a-radio-button v-for="tpl in templates" :key="tpl.id" :value="tpl.id">{{ tpl.name }}</a-radio-button>
+      </a-radio-group>
     </div>
 
-    <!-- 模式选择 -->
-    <div class="mode-selector" role="radiogroup" aria-label="拍照模式">
-      <button
-        v-for="mode in captureModes"
-        :key="mode.id"
-        class="mode-btn"
-        :class="{ active: captureStore.mode === mode.id }"
-        @click="captureStore.setMode(mode.id)"
-        role="radio"
-        :aria-checked="captureStore.mode === mode.id"
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          class="mode-icon"
-        >
-          <component :is="mode.icon" />
-        </svg>
-        <span>{{ mode.label }}</span>
-      </button>
+    <!-- 滤镜选择 -->
+    <div class="flex items-center gap-3">
+      <span class="text-sm font-medium text-text-secondary flex-shrink-0">滤镜</span>
+      <a-radio-group :value="captureStore.filter" button-style="solid" size="small" @change="(e: any) => captureStore.setFilter(e.target.value)">
+        <a-radio-button v-for="f in filterOptions" :key="f" :value="f">{{ filterLabels[f] }}</a-radio-button>
+      </a-radio-group>
     </div>
 
     <!-- 拍照按钮 -->
-    <div class="capture-controls">
-      <button
-        class="btn btn-success take-photo-btn"
-        :disabled="
-          !isScrcpyRunning ||
-          captureStore.photos.length >= captureStore.maxPhotos
-        "
+    <div class="text-center">
+      <a-button
+        type="primary"
+        size="large"
+        :disabled="!isCameraRunning || captureStore.photos.length >= captureStore.maxPhotos"
+        :loading="capturing"
         @click="takePhoto"
-        aria-label="拍照，已拍 {{ captureStore.photos.length }} 张，共 {{ captureStore.maxPhotos }} 张"
+        class="!bg-[#34C759] !border-[#34C759] hover:!bg-[#2DB84E] hover:!border-[#2DB84E]"
       >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          class="btn-icon-svg"
-        >
-          <path
-            d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"
-          />
-          <circle cx="12" cy="13" r="4" />
-        </svg>
-        拍照 ({{ captureStore.photos.length }}/{{ captureStore.maxPhotos }})
-      </button>
+        <template #icon>
+          <CameraOutlined />
+        </template>
+        {{ capturing ? '拍摄中...' : '拍照' }} ({{ captureStore.photos.length }}/{{ captureStore.maxPhotos }})
+      </a-button>
     </div>
 
     <!-- 照片预览 -->
     <div
-      class="photo-strip"
       v-if="captureStore.photos.length > 0"
+      class="flex gap-2 overflow-x-auto pb-2"
       role="list"
       aria-label="已拍摄照片"
     >
       <div
         v-for="(photo, idx) in captureStore.photos"
         :key="idx"
-        class="photo-thumb"
-        :class="{ selected: captureStore.selectedIndex === idx }"
+        class="relative w-20 h-20 rounded-md overflow-hidden cursor-pointer flex-shrink-0 border-2 transition-all"
+        :class="captureStore.selectedIndex === idx ? 'border-primary ring-2 ring-[rgba(0,122,255,0.2)]' : 'border-transparent'"
         @click="captureStore.selectPhoto(idx)"
         role="listitem"
         tabindex="0"
         :aria-label="`照片 ${idx + 1}${photo.isLive ? ', Live Photo' : ''}`"
       >
-        <img :src="photo.dataUrl" alt="" loading="lazy" />
+        <a-image
+          :src="photo.dataUrl"
+          :preview="false"
+          class="!w-full !h-full"
+          style="object-fit: cover;"
+        />
         <button
-          class="remove-btn"
+          class="absolute top-1 right-1 w-6 h-6 bg-[rgba(0,0,0,0.6)] text-white rounded-full flex items-center justify-center hover:bg-[rgba(255,59,48,0.8)] transition-colors"
           @click.stop="removePhoto(idx)"
           aria-label="删除照片"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
+          <CloseOutlined style="font-size: 12px;" />
         </button>
-        <span class="photo-badge" v-if="photo.isLive">LIVE</span>
+        <span
+          v-if="photo.isLive"
+          class="absolute bottom-1 left-1 px-1.5 py-0.5 bg-[rgba(0,0,0,0.7)] text-white text-[10px] font-bold tracking-wider rounded"
+        >
+          LIVE
+        </span>
       </div>
     </div>
 
     <!-- 完成按钮 -->
-    <button
+    <a-button
       v-if="captureStore.photos.length > 0"
-      class="btn btn-primary complete-btn"
+      type="primary"
+      size="large"
+      block
       @click="$emit('complete')"
     >
+      <template #icon>
+        <ArrowRightOutlined />
+      </template>
       下一步
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        class="btn-icon-svg"
-      >
-        <polyline points="9 18 15 12 9 6" />
-      </svg>
-    </button>
+    </a-button>
   </div>
 </template>
 
 <script setup lang="ts">
+import {
+  CameraOutlined,
+  ScanOutlined,
+  CloseOutlined,
+  CheckCircleOutlined,
+  ArrowRightOutlined,
+} from "@ant-design/icons-vue"
 import { ref, computed, onUnmounted } from "vue"
-import { useCaptureStore } from "../stores/capture"
-import { useScrcpyStore } from "../stores/scrcpy"
+import { useCaptureStore, FILTER_CSS, FILTER_LABELS, TEMPLATES, type FilterType } from "../stores/capture"
+import { useCameraStore } from "../stores/camera"
 
 defineEmits<{
   complete: []
 }>()
 
 const captureStore = useCaptureStore()
-const scrcpyStore = useScrcpyStore()
-const videoEl = ref<HTMLVideoElement | null>(null)
+const cameraStore = useCameraStore()
 const deviceId = ref("")
-let ws: WebSocket | null = null
+const capturing = ref(false)
+const mjpegUrl = "http://127.0.0.1:27183"
 
-const isScrcpyRunning = computed(() => scrcpyStore.isConnected)
+const templates = TEMPLATES
+const filterOptions = Object.keys(FILTER_LABELS) as FilterType[]
+const filterLabels = FILTER_LABELS
 
-const captureModes = [
-  { id: "grid4" as const, label: "四宫格", icon: "grid" },
-  { id: "newspaper" as const, label: "报纸机", icon: "newspaper" },
-  { id: "live" as const, label: "Live Photo", icon: "live" },
-]
+const isCameraRunning = computed(() => cameraStore.isConnected)
+const previewFilter = computed(() => FILTER_CSS[captureStore.filter])
 
-async function startScrcpy() {
+async function startCamera() {
   try {
     const { invoke } = await import("@tauri-apps/api/core")
     const devices: string[] = await invoke("get_device_list")
     if (devices.length === 0) {
-      alert("未检测到设备，请检查 USB 连接和调试模式")
+      alert("未检测到设备，请检查 USB 连接")
       return
     }
     deviceId.value = devices[0]
-    await invoke("start_scrcpy", { deviceId: devices[0] })
-    scrcpyStore.setState({
+    await invoke("start_camera_stream", { deviceId: devices[0] })
+    cameraStore.setState({
       connected: true,
       running: true,
       deviceId: devices[0],
     })
-    connectWebSocket()
   } catch (e) {
     alert(e instanceof Error ? e.message : String(e))
   }
 }
 
-function connectWebSocket() {
-  ws = new WebSocket("ws://localhost:27183")
-  ws.onopen = () => console.log("WebSocket connected")
-  ws.onmessage = (event) => {
-    if (event.data instanceof Blob) {
-      // Handle video frames
-    }
-  }
-  ws.onerror = (error) => console.error("WebSocket error:", error)
-}
-
 async function takePhoto() {
+  capturing.value = true
   try {
     const { invoke } = await import("@tauri-apps/api/core")
-    const devId = scrcpyStore.state.deviceId
+    const devId = cameraStore.state.deviceId
     if (!devId) {
       alert("请先连接设备")
       return
@@ -231,7 +185,6 @@ async function takePhoto() {
     const photoPath: string = await invoke("take_photo", { deviceId: devId })
     const thumbnail: string = await invoke("get_photo_thumbnail", {
       filename: photoPath,
-      deviceId: devId,
       flip: false,
     })
     const isLive: boolean = await invoke("check_live_photo", {
@@ -244,6 +197,8 @@ async function takePhoto() {
     })
   } catch (e) {
     alert(e instanceof Error ? e.message : String(e))
+  } finally {
+    capturing.value = false
   }
 }
 
@@ -251,258 +206,13 @@ function removePhoto(index: number) {
   captureStore.removePhoto(index)
 }
 
-onUnmounted(() => {
-  if (ws) ws.close()
+onUnmounted(async () => {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    await invoke("stop_camera_stream")
+    cameraStore.reset()
+  } catch {
+    // ignore errors on cleanup
+  }
 })
 </script>
-
-<style scoped>
-.capture-view {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  gap: var(--space-md);
-  padding: var(--space-md);
-}
-
-.mirror-container {
-  flex: 1;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  position: relative;
-}
-
-.mirror-placeholder {
-  text-align: center;
-  color: var(--text-secondary);
-  padding: var(--space-xl);
-}
-
-.placeholder-icon {
-  width: 64px;
-  height: 64px;
-  margin: 0 auto var(--space-lg);
-  color: var(--text-tertiary);
-}
-
-.placeholder-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: var(--space-sm);
-}
-
-.placeholder-desc {
-  font-size: 14px;
-  margin-bottom: var(--space-lg);
-}
-
-.device-status {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  background: rgba(0, 122, 255, 0.1);
-  border-radius: var(--radius-full);
-  color: var(--android-blue);
-  font-size: 14px;
-  font-weight: 500;
-  margin-bottom: var(--space-lg);
-}
-
-.status-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.connect-btn {
-  margin-top: var(--space-md);
-}
-
-.mirror-video {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.scrcpy-badge {
-  position: absolute;
-  top: var(--space-md);
-  right: var(--space-md);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: rgba(0, 0, 0, 0.7);
-  border-radius: var(--radius-full);
-  color: white;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--android-red);
-}
-
-.status-dot.active {
-  background: var(--android-green);
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
-}
-
-.mode-selector {
-  display: flex;
-  gap: var(--space-sm);
-}
-
-.mode-btn {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all var(--transition-base);
-  font-size: 14px;
-  font-weight: 500;
-  min-height: 44px;
-}
-
-.mode-btn:hover {
-  background: var(--bg-tertiary);
-}
-
-.mode-btn.active {
-  background: var(--android-blue);
-  color: white;
-  border-color: var(--android-blue);
-}
-
-.mode-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.capture-controls {
-  text-align: center;
-}
-
-.take-photo-btn {
-  padding: 12px 32px;
-  font-size: 16px;
-  min-height: 48px;
-}
-
-.btn-icon-svg {
-  width: 20px;
-  height: 20px;
-}
-
-.photo-strip {
-  display: flex;
-  gap: var(--space-sm);
-  overflow-x: auto;
-  padding: var(--space-xs) 0;
-}
-
-.photo-thumb {
-  position: relative;
-  width: 80px;
-  height: 80px;
-  border-radius: var(--radius-md);
-  border: 2px solid transparent;
-  overflow: hidden;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: border-color var(--transition-base);
-}
-
-.photo-thumb.selected {
-  border-color: var(--android-blue);
-}
-
-.photo-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.remove-btn {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 24px;
-  height: 24px;
-  background: rgba(0, 0, 0, 0.6);
-  color: white;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background var(--transition-base);
-}
-
-.remove-btn:hover {
-  background: rgba(255, 59, 48, 0.8);
-}
-
-.remove-btn svg {
-  width: 12px;
-  height: 12px;
-}
-
-.photo-badge {
-  position: absolute;
-  bottom: 4px;
-  left: 4px;
-  padding: 2px 6px;
-  background: rgba(0, 0, 0, 0.7);
-  color: white;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.complete-btn {
-  padding: 12px;
-  font-size: 16px;
-  min-height: 48px;
-}
-
-@media (max-width: 768px) {
-  .capture-view {
-    padding: var(--space-sm);
-    gap: var(--space-sm);
-  }
-
-  .photo-thumb {
-    width: 64px;
-    height: 64px;
-  }
-}
-</style>

@@ -2,6 +2,9 @@
 
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 /// 应用数据目录：~/Library/Application Support/photobooth/
 pub fn app_data_dir() -> PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -17,6 +20,22 @@ pub fn temp_dir() -> PathBuf {
 pub fn ensure_dir(path: &std::path::Path) -> std::io::Result<()> {
     if !path.exists() {
         std::fs::create_dir_all(path)?;
+    }
+    Ok(())
+}
+
+/// 确保文件具有可执行权限。
+///
+/// Tauri 在打包资源到 `.app/Contents/Resources` 时可能丢失执行位，
+/// 导致 `Command::new(helper).spawn()` 报 "Permission denied (os error 13)"。
+/// 此函数检测任一可执行位（user/group/other）是否设置，未设置则为三者补齐。
+#[cfg(unix)]
+pub fn ensure_executable(path: &std::path::Path) -> std::io::Result<()> {
+    let mut perms = std::fs::metadata(path)?.permissions();
+    if perms.mode() & 0o111 == 0 {
+        perms.set_mode(perms.mode() | 0o111);
+        std::fs::set_permissions(path, perms)?;
+        log::info!("已为 {} 补充可执行权限", path.display());
     }
     Ok(())
 }

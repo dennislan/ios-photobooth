@@ -77,7 +77,18 @@ pub async fn start(device_id: String) -> Result<String, String> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("启动相机辅助进程失败: {}", e))
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    format!(
+                        "启动相机辅助进程失败: {}\n\
+                         原因：辅助工具不可执行。请重新运行 ./build.sh，\n\
+                         或在终端执行：chmod +x \"{}\"",
+                        e, helper_path
+                    )
+                } else {
+                    format!("启动相机辅助进程失败: {}", e)
+                }
+            })
     })?;
 
     let stdin = child.stdin.take().ok_or("无法获取 helper stdin")?;
@@ -236,6 +247,22 @@ pub fn mjpeg_port() -> u16 {
 
 /// 查找相机辅助工具（供诊断命令复用）
 pub fn find_helper() -> Option<String> {
+    let candidate = find_helper_raw()?;
+
+    // 打包后 Tauri 可能丢失执行位，导致 spawn 报 Permission denied (os error 13)。
+    // 在此尽力补齐 +x；若失败（如 .app 只读）则保留原路径，由 spawn 给出明确错误。
+    #[cfg(unix)]
+    {
+        if let Err(e) = crate::utils::ensure_executable(std::path::Path::new(&candidate)) {
+            log::warn!("无法为辅助工具补充可执行权限: {}", e);
+        }
+    }
+
+    Some(candidate)
+}
+
+/// 实际的路径查找逻辑（不包含权限处理）
+fn find_helper_raw() -> Option<String> {
     // 1. 应用数据目录
     let candidate = crate::utils::app_data_dir().join("ios_camera_stream");
     if candidate.exists() {
@@ -260,12 +287,14 @@ pub fn find_helper() -> Option<String> {
     }
 
     // 3. 开发时从 src-tauri/resources 查找
+    //    exe 位于 src-tauri/target/{debug,release}/photobooth，
+    //    上溯三级得到 src-tauri 目录，其下即 resources/ios_camera_stream。
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dev_resources) = exe
             .parent()
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
-            .map(|p| p.join("src-tauri").join("resources").join("ios_camera_stream"))
+            .map(|p| p.join("resources").join("ios_camera_stream"))
         {
             if dev_resources.exists() {
                 return Some(dev_resources.to_string_lossy().to_string());

@@ -156,5 +156,5 @@ These are not bundled as npm/Cargo deps — they must be installed on the target
 - Assets dir: `~/Desktop/photobooth-assets/` (macOS) — where composite outputs are saved
 - Captured photos are written to `/tmp/photobooth/` as HEIC files
 - The MJPEG preview stream is served on `127.0.0.1:27183` by the Swift helper
-- OTA update endpoint is configurable via env var `PHOTOBOOTH_UPDATE_ENDPOINT` and `import.meta.env.PHOTOBOOTH_UPDATE_ENDPOINT`
+- OTA updates are sourced from the latest GitHub release. Repo configurable via env var `PHOTOBOOTH_GITHUB_REPO` (format: `owner/repo`)
 - App identifier: `com.photobooth.app`, window title: `大头贴`

@@ -32,13 +32,9 @@ export const useUpdateStore = defineStore("update", {
       this.error = undefined
 
       try {
-        // Get the update endpoint from the Tauri config
-        // Falls back to env var PHOTOBOOTH_UPDATE_ENDPOINT
-        const endpoint =
-          import.meta.env.PHOTOBOOTH_UPDATE_ENDPOINT ||
-          "https://your-server.example.com/api/updates/{{target}}/{{current_version}}"
-
-        const result = (await invoke("check_for_updates", { endpoint })) as Record<string, unknown>
+        // Invoke Rust's check_for_updates — it queries the GitHub Releases API
+        // The GitHub repo is configured server-side (constant or env var)
+        const result = (await invoke("check_for_updates")) as Record<string, unknown>
 
         // Fetch the current version from Rust
         const version = (await invoke("get_app_version")) as string
@@ -76,12 +72,7 @@ export const useUpdateStore = defineStore("update", {
           import.meta.env.PHOTOBOOTH_APP_BUNDLE_PATH ||
           "/Applications/photobooth.app"
 
-        const endpoint =
-          import.meta.env.PHOTOBOOTH_UPDATE_ENDPOINT ||
-          "https://your-server.example.com/api/updates/{{target}}/{{current_version}}"
-
         await invoke("apply_update", {
-          endpoint,
           appBundlePath: bundlePath,
         })
 

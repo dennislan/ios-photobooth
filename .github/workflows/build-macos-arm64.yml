@@ -1,0 +1,83 @@
+name: Build macOS (arm64)
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-macos-arm64:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup Rust (arm64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-arm64-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: cargo-arm64-
+
+      - name: Install libimobiledevice & ffmpeg
+        run: |
+          brew update
+          brew install libimobiledevice ffmpeg
+
+      - name: Build Swift camera helper (arm64)
+        working-directory: src-tauri/ios_camera_stream
+        run: |
+          swift build -c release --arch arm64
+          mkdir -p ../resources
+          cp .build/arm64-apple-macosx/release/ios_camera_stream ../resources/ios_camera_stream
+          chmod +x ../resources/ios_camera_stream
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build & bundle with Tauri (arm64)
+        env:
+          # Target arm64 explicitly
+          CARGO_BUILD_TARGET: aarch64-apple-darwin
+        run: npx tauri build --target aarch64-apple-darwin
+
+      - name: Verify bundle
+        id: verify
+        run: |
+          BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          echo "## Bundle contents" >> $GITHUB_STEP_SUMMARY
+          find "$BUNDLE" -maxdepth 2 -type f \( -name "*.app" -o -name "*.dmg" \) -exec ls -lh {} \; | awk '{print "- " $NF " (" $5 ")"}' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: photobooth-macos-arm64-app
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: photobooth-macos-arm64-dmg
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: warn
+          retention-days: 30

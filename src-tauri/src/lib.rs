@@ -19,6 +19,10 @@ mod restart;
 /// App version — kept in sync with Cargo.toml [package] version.
 const APP_VERSION: &str = "1.0.0";
 
+/// GitHub repository to check for updates (format: "owner/repo").
+/// Override at runtime via the PHOTOBOOTH_GITHUB_REPO environment variable.
+const GITHUB_REPO: &str = "vivo-ai/photobooth";
+
 #[tauri::command]
 async fn start_camera_stream(device_id: String) -> Result<String, String> {
     camera_stream::start(device_id).await
@@ -220,16 +224,17 @@ async fn get_device_info(device_id: String) -> Result<serde_json::Value, String>
     }))
 }
 
-/// Check for updates from the configured update endpoint.
+/// Check for updates from GitHub Releases.
 #[tauri::command]
-async fn check_for_updates(endpoint: String) -> Result<serde_json::Value, String> {
-    let current_version = APP_VERSION;
-    let manifest = updater::check_for_updates(&endpoint, current_version).await?;
+async fn check_for_updates() -> Result<serde_json::Value, String> {
+    let repo = std::env::var("PHOTOBOOTH_GITHUB_REPO")
+        .unwrap_or_else(|_| GITHUB_REPO.to_string());
+    let manifest = updater::check_for_updates(&repo).await?;
 
     match manifest {
         Some(m) => Ok(serde_json::json!({
             "available": true,
-            "current_version": current_version,
+            "current_version": APP_VERSION,
             "latest_version": m.version,
             "changelog": m.changelog,
             "mandatory": m.mandatory,
@@ -237,20 +242,18 @@ async fn check_for_updates(endpoint: String) -> Result<serde_json::Value, String
         })),
         None => Ok(serde_json::json!({
             "available": false,
-            "current_version": current_version,
+            "current_version": APP_VERSION,
         })),
     }
 }
 
-/// Apply an update: download the zip, extract, replace the .app bundle,
-/// spawn the restart helper, then schedule the app to quit.
+/// Apply an update: download the zip from the latest GitHub release, extract,
+/// replace the .app bundle, spawn the restart helper, then schedule the app to quit.
 #[tauri::command]
-async fn apply_update(
-    endpoint: String,
-    app_bundle_path: String,
-) -> Result<(), String> {
-    let current_version = APP_VERSION;
-    let manifest = updater::check_for_updates(&endpoint, current_version).await?;
+async fn apply_update(app_bundle_path: String) -> Result<(), String> {
+    let repo = std::env::var("PHOTOBOOTH_GITHUB_REPO")
+        .unwrap_or_else(|_| GITHUB_REPO.to_string());
+    let manifest = updater::check_for_updates(&repo).await?;
 
     let manifest = manifest.ok_or_else(|| "No update available".to_string())?;
 

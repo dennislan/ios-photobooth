@@ -22,11 +22,7 @@
         <h1 class="text-xl font-bold text-text-primary m-0">大头贴</h1>
       </div>
 
-      <a-tabs
-        v-model:active-key="currentView"
-        size="small"
-        :style="{ borderBottom: 'none' }"
-      >
+      <a-tabs v-model:active-key="currentView" size="small">
         <a-tab-pane key="idle" tab="待机" />
         <a-tab-pane key="capture" tab="拍照" />
         <a-tab-pane key="selection" tab="选片" />

@@ -1,18 +1,25 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 
-export type CaptureMode = 'grid4' | 'newspaper' | 'live';
-export type DeviceOrientation = 'portrait' | 'landscape';
-export type FilterType = 'none' | 'bw' | 'sepia' | 'warm' | 'cool' | 'vivid';
-export type TemplateLayout = 'grid4' | 'single' | 'strip';
+// ── 类型定义 ──
 
+/** 滤镜类型（参照 macOS Photo Booth 的视觉效果） */
+export type FilterType = 'none' | 'bw' | 'sepia' | 'warm' | 'cool' | 'vivid';
+
+/** 模板布局类型 */
+export type LayoutType = 'grid4' | 'single' | 'strip';
+
+/** 已拍摄照片 */
 export interface PhotoItem {
+  /** Base64 data URL，供前端显示 */
   dataUrl: string;
-  filePath?: string;
-  isLive?: boolean;
+  /** 后端文件路径，供打印使用 */
+  filePath: string;
 }
 
-/** 滤镜 → CSS filter 字符串 (用于预览和 canvas 渲染) */
+// ── 常量 ──
+
+/** 滤镜 → CSS filter 字符串（用于预览和 Canvas 渲染） */
 export const FILTER_CSS: Record<FilterType, string> = {
   none: 'none',
   bw: 'grayscale(1) contrast(1.05)',
@@ -22,6 +29,7 @@ export const FILTER_CSS: Record<FilterType, string> = {
   vivid: 'saturate(1.6) contrast(1.15)',
 };
 
+/** 滤镜显示标签 */
 export const FILTER_LABELS: Record<FilterType, string> = {
   none: '原图',
   bw: '黑白',
@@ -31,46 +39,83 @@ export const FILTER_LABELS: Record<FilterType, string> = {
   vivid: '鲜艳',
 };
 
-export const TEMPLATES: { id: TemplateLayout; name: string; cols: number; rows: number; slots: number }[] = [
+/** 模板布局配置 */
+export interface LayoutConfig {
+  id: LayoutType;
+  name: string;
+  cols: number;
+  rows: number;
+  slots: number;
+}
+
+export const LAYOUTS: LayoutConfig[] = [
   { id: 'grid4', name: '四宫格', cols: 2, rows: 2, slots: 4 },
   { id: 'single', name: '单张', cols: 1, rows: 1, slots: 1 },
   { id: 'strip', name: '长条', cols: 1, rows: 4, slots: 4 },
 ];
 
+/** 打印纸张尺寸选项 */
+export const PAPER_SIZES = [
+  { value: '4x6', label: '4×6 英寸' },
+  { value: '5x7', label: '5×7 英寸' },
+  { value: '6x8', label: '6×8 英寸' },
+  { value: 'A4', label: 'A4' },
+];
+
+/** 打印色彩模式选项 */
+export const COLOR_MODES = [
+  { value: 'color', label: '彩色' },
+  { value: 'bw', label: '黑白' },
+];
+
+// ── Store ──
+
+/**
+ * 拍摄 Store
+ * 管理照片列表、模板布局、滤镜、选片结果、打印设置
+ */
 export const useCaptureStore = defineStore('capture', () => {
-  const mode = ref<CaptureMode>('grid4');
   const photos = ref<PhotoItem[]>([]);
-  const selectedIndex = ref<number>(-1);
-  const deviceConnected = ref(false);
-  const deviceOrientation = ref<DeviceOrientation>('portrait');
-  const templateId = ref<string>('grid4');
+  const layoutId = ref<LayoutType>('grid4');
   const filter = ref<FilterType>('none');
 
-  // 选片结果
-  const selectedPhotoIndices = ref<number[]>([]);
+  /** 选片结果（照片在 photos 数组中的索引） */
+  const selectedIndices = ref<number[]>([]);
 
   // 打印设置
   const paperSize = ref('4x6');
-  const printMode = ref('color');
+  const colorMode = ref('color');
   const copies = ref(1);
 
-  const maxPhotos = computed(() => {
-    const tpl = TEMPLATES.find((t) => t.id === templateId.value);
-    return tpl ? tpl.slots : 4;
+  /** 当前模板布局配置 */
+  const currentLayout = computed(
+    () => LAYOUTS.find((t) => t.id === layoutId.value) ?? LAYOUTS[0],
+  );
+
+  /** 当前布局最大照片数 */
+  const maxPhotos = computed(() => currentLayout.value.slots);
+
+  /** 已选照片数量 */
+  const selectedCount = computed(() => selectedIndices.value.length);
+
+  /** 获取用于排版/打印的照片（按选片顺序，未选则全部） */
+  const photosForLayout = computed<PhotoItem[]>(() => {
+    if (selectedIndices.value.length > 0) {
+      return selectedIndices.value
+        .map((i) => photos.value[i])
+        .filter((p): p is PhotoItem => !!p);
+    }
+    return photos.value;
   });
 
-  function setMode(m: CaptureMode) {
-    mode.value = m;
-    photos.value = [];
-    selectedIndex.value = -1;
-  }
+  // ── 动作 ──
 
-  function setTemplate(id: string) {
-    templateId.value = id;
-    // 切换模板时清空超出数量的照片
-    const tpl = TEMPLATES.find((t) => t.id === id);
-    if (tpl && photos.value.length > tpl.slots) {
-      photos.value = photos.value.slice(0, tpl.slots);
+  function setLayout(id: LayoutType) {
+    layoutId.value = id;
+    // 切换布局时清空超出数量的照片
+    const layout = LAYOUTS.find((t) => t.id === id);
+    if (layout && photos.value.length > layout.slots) {
+      photos.value = photos.value.slice(0, layout.slots);
     }
   }
 
@@ -81,47 +126,62 @@ export const useCaptureStore = defineStore('capture', () => {
   function addPhoto(photo: PhotoItem) {
     if (photos.value.length < maxPhotos.value) {
       photos.value.push(photo);
-      selectedIndex.value = photos.value.length - 1;
     }
-  }
-
-  function selectPhoto(index: number) {
-    selectedIndex.value = index;
   }
 
   function removePhoto(index: number) {
     photos.value.splice(index, 1);
-    if (selectedIndex.value >= photos.value.length) {
-      selectedIndex.value = Math.max(0, photos.value.length - 1);
+    // 同步更新选片索引
+    selectedIndices.value = selectedIndices.value
+      .filter((i) => i !== index)
+      .map((i) => (i > index ? i - 1 : i));
+  }
+
+  function toggleSelection(index: number) {
+    const pos = selectedIndices.value.indexOf(index);
+    if (pos >= 0) {
+      selectedIndices.value.splice(pos, 1);
+    } else {
+      selectedIndices.value.push(index);
     }
   }
 
   function clearPhotos() {
     photos.value = [];
-    selectedIndex.value = -1;
-    selectedPhotoIndices.value = [];
+    selectedIndices.value = [];
   }
 
-  function setSelectedPhotos(indices: number[]) {
-    selectedPhotoIndices.value = [...indices];
+  /** 重置全部状态（回到初始） */
+  function resetAll() {
+    clearPhotos();
+    layoutId.value = 'grid4';
+    filter.value = 'none';
+    paperSize.value = '4x6';
+    colorMode.value = 'color';
+    copies.value = 1;
   }
-
-  /** 获取要用于排版/打印的照片（按选片顺序，未选则全部） */
-  const photosForLayout = computed(() => {
-    if (selectedPhotoIndices.value.length > 0) {
-      return selectedPhotoIndices.value
-        .map((i) => photos.value[i])
-        .filter((p): p is PhotoItem => !!p);
-    }
-    return photos.value;
-  });
 
   return {
-    mode, photos, selectedIndex, deviceConnected,
-    deviceOrientation, templateId, filter, maxPhotos,
-    selectedPhotoIndices, paperSize, printMode, copies,
+    // 状态
+    photos,
+    layoutId,
+    filter,
+    selectedIndices,
+    paperSize,
+    colorMode,
+    copies,
+    // 计算属性
+    currentLayout,
+    maxPhotos,
+    selectedCount,
     photosForLayout,
-    setMode, setTemplate, setFilter, addPhoto, selectPhoto,
-    removePhoto, clearPhotos, setSelectedPhotos,
+    // 动作
+    setLayout,
+    setFilter,
+    addPhoto,
+    removePhoto,
+    toggleSelection,
+    clearPhotos,
+    resetAll,
   };
 });

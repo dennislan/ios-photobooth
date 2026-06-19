@@ -1,25 +1,19 @@
-// 工具函数
+// 共享工具函数 — 路径解析、目录管理、Base64 编码、可执行文件查找
 
 use std::path::PathBuf;
 
-/// 获取应用数据目录
+/// 应用数据目录：~/Library/Application Support/photobooth/
 pub fn app_data_dir() -> PathBuf {
-    let base = dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."));
+    let base = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join("photobooth")
 }
 
-/// 获取素材目录
-pub fn assets_dir() -> PathBuf {
-    let base = if cfg!(target_os = "windows") {
-        app_data_dir()
-    } else {
-        dirs::desktop_dir().unwrap_or_else(|| PathBuf::from("."))
-    };
-    base.join("photobooth-assets")
+/// 临时工作目录：/tmp/photobooth/
+pub fn temp_dir() -> PathBuf {
+    PathBuf::from("/tmp/photobooth")
 }
 
-/// 确保目录存在
+/// 确保目录存在，不存在则递归创建
 pub fn ensure_dir(path: &std::path::Path) -> std::io::Result<()> {
     if !path.exists() {
         std::fs::create_dir_all(path)?;
@@ -27,32 +21,70 @@ pub fn ensure_dir(path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Base64 编码
+/// Base64 编码字节数组
 pub fn base64_encode(data: &[u8]) -> String {
-    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data)
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
 }
 
-/// 获取文件扩展名
-fn exe_ext() -> &'static str {
-    if cfg!(target_os = "windows") { ".exe" } else { "" }
+/// 解码 Base64 字符串（自动去除 data URL 前缀）
+pub fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    let cleaned = data
+        .trim_start_matches("data:image/jpeg;base64,")
+        .trim_start_matches("data:image/png;base64,")
+        .trim_start_matches("data:image/jpg;base64,");
+    base64::engine::general_purpose::STANDARD
+        .decode(cleaned)
+        .map_err(|e| format!("Base64 解码失败: {}", e))
 }
 
-/// 查找可执行文件（优先从应用目录查找，其次从 PATH）
+/// macOS Homebrew 常见安装路径
+const HOMEBREW_PATHS: &[&str] = &[
+    "/opt/homebrew/bin", // Apple Silicon
+    "/usr/local/bin",    // Intel
+];
+
+/// 应用启动时补全 PATH 环境变量
+///
+/// 从 Finder/Spotlight 启动的 GUI 应用，PATH 仅含 /usr/bin:/bin，
+/// 不包含 Homebrew 路径，导致 idevice_id/ffmpeg 等工具无法被发现。
+/// 此函数在应用启动时将 Homebrew 路径注入 PATH。
+pub fn setup_environment() {
+    if let Some(current_path) = std::env::var_os("PATH") {
+        let current = current_path.to_string_lossy().to_string();
+        let mut parts: Vec<&str> = current.split(':').collect();
+        for brew in HOMEBREW_PATHS {
+            if !parts.contains(brew) {
+                parts.push(brew);
+            }
+        }
+        let new_path = parts.join(":");
+        std::env::set_var("PATH", &new_path);
+        log::info!("PATH 已补全 Homebrew 路径");
+    }
+}
+
+/// 查找可执行文件：优先应用数据目录 → Homebrew 路径 → 系统 PATH
 pub fn find_executable(name: &str) -> Option<String> {
-    let ext = exe_ext();
-    
-    // 1. 从应用数据目录查找
-    let app_dir = app_data_dir();
-    let candidate = app_dir.join(format!("{}{}", name, ext));
+    // 1. 应用数据目录（允许随应用分发外部工具）
+    let candidate = app_data_dir().join(name);
     if candidate.exists() {
         return Some(candidate.to_string_lossy().to_string());
     }
 
-    // 2. 从 PATH 查找
+    // 2. Homebrew 常见路径（GUI 应用 PATH 可能不含这些路径）
+    for brew in HOMEBREW_PATHS {
+        let path = std::path::Path::new(brew).join(name);
+        if path.exists() {
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+
+    // 3. 系统 PATH
     if let Some(path_var) = std::env::var_os("PATH") {
-        let sep = if cfg!(target_os = "windows") { ';' } else { ':' };
-        for dir in path_var.to_string_lossy().split(sep) {
-            let path = std::path::Path::new(dir).join(format!("{}{}", name, ext));
+        for dir in path_var.to_string_lossy().split(':') {
+            let path = std::path::Path::new(dir).join(name);
             if path.exists() {
                 return Some(path.to_string_lossy().to_string());
             }
@@ -60,20 +92,4 @@ pub fn find_executable(name: &str) -> Option<String> {
     }
 
     None
-}
-
-/// 条件编译：Windows 下隐藏控制台窗口
-#[cfg(target_os = "windows")]
-pub fn create_hidden_command(program: &str) -> std::process::Command {
-    use std::process::Command;
-    let mut cmd = Command::new(program);
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    cmd
-}
-
-/// 条件编译：非 Windows 下正常创建命令
-#[allow(dead_code)]
-#[cfg(not(target_os = "windows"))]
-pub fn create_hidden_command(program: &str) -> std::process::Command {
-    std::process::Command::new(program)
 }

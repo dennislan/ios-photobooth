@@ -1,160 +1,118 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+大头贴 (Photobooth) — macOS 桌面拍照打印应用。使用 Tauri 2.0 + Vue 3 + Rust + Swift 构建。
 
-## Project Overview
+## 概述
 
-**大头贴 (Photobooth)** — A macOS desktop photobooth app built with Tauri 2.0 + Vue 3 + Rust. It connects to an iPhone via USB for remote camera control, streams a live MJPEG preview from the phone's camera, captures close-up portraits (大头照), composites photos onto branded templates using FFmpeg, and prints the result. Designed for offline retail-store use with an OTA self-update mechanism.
+通过 USB 连接 iPhone 作为外接相机，提供实时 MJPEG 预览、拍照、照片选择、Canvas 合成排版和打印功能。参照 macOS "Photo Booth" 核心体验设计。
 
-## Tech Stack
+## 技术栈
 
-| Layer | Technology |
-|-------|-----------|
-| Desktop shell | Tauri 2.0 (Rust backend + WebView) |
-| Frontend | Vue 3 + Vite + Pinia + TypeScript + Ant Design Vue 4 + Tailwind CSS 4 |
-| Backend | Rust (Tauri commands, async/tokio) |
-| iPhone camera | libimobiledevice (`idevice_id`, `ideviceinfo`) for device discovery + Swift helper (AVFoundation) for MJPEG preview & photo capture |
-| Media processing | FFmpeg (HEIC handling, HEVC transcoding, template compositing, ffprobe) |
-| Printing | macOS `lpr` / Windows PowerShell / Linux `lp` |
-| OTA updates | Self-hosted HTTP endpoint, semver comparison, in-place `.app` bundle replacement + restart helper |
-| Deep link | `photobooth://` URL scheme |
+| 层 | 技术 |
+|----|------|
+| 桌面壳 | Tauri 2.0 (Rust + WebView) |
+| 前端 | Vue 3 + Vite + Pinia + TypeScript + Ant Design Vue 4 + Tailwind CSS 4 |
+| 后端 | Rust (Tauri commands, tokio) |
+| 相机 | libimobiledevice + Swift (AVFoundation MJPEG 流) |
+| 打印 | macOS lpr (CUPS) |
 
-## Architecture
+## 架构
 
 ```
 photobooth/
-├── src/                          # Vue 3 frontend
-│   ├── main.ts                   # Entry — creates Vue app, mounts Pinia + Antd
-│   ├── App.vue                   # Root — 4-view router (idle → capture → selection → preview) + UpdateBanner
-│   ├── stores/                   # Pinia stores
-│   │   ├── capture.ts            # Capture mode, photos list, device state
-│   │   ├── camera.ts             # iPhone camera connection state (connected, running, deviceId)
-│   │   ├── template.ts           # Template configs & composite status
-│   │   └── update.ts             # OTA update state machine
+├── src/                      # Vue 3 前端
+│   ├── main.ts               # 入口
+│   ├── App.vue               # 根组件 — 4 视图路由 (welcome→capture→select→print)
+│   ├── stores/
+│   │   ├── capture.ts        # 照片、布局、滤镜、选片、打印设置
+│   │   └── camera.ts         # 相机连接状态
 │   ├── components/
-│   │   ├── IdleView.vue          # Standby screen
-│   │   ├── SettingsPanel.vue     # App settings modal
-│   │   └── UpdateBanner.vue      # Update notification banner
+│   │   ├── WelcomeScreen.vue # 待机屏
+│   │   └── SettingsModal.vue # 设置弹窗
 │   ├── views/
-│   │   ├── CaptureView.vue       # Live MJPEG preview + photo capture
-│   │   ├── SelectionView.vue     # Photo selection
-│   │   └── PreviewView.vue       # Template composite preview + print
-│   └── styles/
-│       └── tailwind.css          # Tailwind CSS entry + global styles
-│
-├── src-tauri/                    # Rust backend
+│   │   ├── CaptureView.vue   # 实时预览 + 拍照
+│   │   ├── SelectView.vue    # 选片
+│   │   └── PrintView.vue     # 合成预览 + 打印
+│   └── styles/tailwind.css
+├── src-tauri/                # Rust 后端
 │   ├── src/
-│   │   ├── lib.rs                # Tauri entry — registers all commands & plugins, APP_VERSION
-│   │   ├── ios_camera.rs         # iPhone discovery (idevice_id) + device info (ideviceinfo) + caching
-│   │   ├── camera_stream.rs      # Swift helper process lifecycle (start/stop/is_running)
-│   │   ├── ffmpeg.rs             # Live Photo detection, ffprobe photo info, HEVC→H.264 transcode
-│   │   ├── template.rs           # JSON-driven template compositing (FFmpeg filter graph)
-│   │   ├── printer.rs            # Cross-platform printing (lpr / PowerShell / cups)
-│   │   ├── deep_link.rs          # photobooth:// URL parsing
-│   │   ├── updater.rs            # Update manifest fetch (semver), download, in-place bundle replace
-│   │   ├── restart.rs            # nohup survivor script — relaunches app after update
-│   │   ├── utils.rs              # Shared helpers: path resolution, base64, executable lookup
-│   │   └── main.rs               # Binary entry — calls lib::main()
-│   ├── ios_camera_stream/        # Swift helper tool (Swift Package Manager)
+│   │   ├── lib.rs            # Tauri 入口 — 注册命令
+│   │   ├── camera.rs         # iPhone 设备发现与验证
+│   │   ├── stream.rs         # Swift helper 生命周期
+│   │   ├── photo.rs          # 照片文件 I/O
+│   │   ├── printer.rs        # macOS lpr 打印
+│   │   ├── utils.rs          # 共享工具函数
+│   │   └── main.rs           # 二进制入口
+│   ├── ios_camera_stream/    # Swift 相机辅助工具
 │   │   ├── Package.swift
-│   │   └── Sources/main.swift    # AVCaptureSession + MJPEG TCP server (port 27183) + stdin-driven capture
-│   ├── resources/
-│   │   └── ios_camera_stream     # Prebuilt Swift helper binary (bundled resource)
-│   ├── Cargo.toml                # Dependencies: tauri 2, tokio, reqwest, serde, semver, ffmpeg via CLI; lib name: photobooth_lib
-│   ├── tauri.conf.json           # App config: window 1280×900, output dir gen/, identifier com.photobooth.app
-│   ├── capabilities/default.json # Permission grants for Tauri plugins
-│   ├── build.rs                  # tauri_build::build()
-│   └── icons/                    # App icons for all platforms
-│
-├── build.sh                      # One-click build script (checks prereqs, builds frontend + Tauri)
-├── package.json                  # npm scripts: dev, build, tauri:dev, tauri:build
-├── vite.config.ts                # Vue plugin, PostCSS, server on 0.0.0.0:1420, output to src-tauri/gen
-├── postcss.config.js             # Tailwind CSS 4 PostCSS plugin
-├── tsconfig.json                 # ES2020, strict, path alias @/* → src/*
-└── index.html
+│   │   └── Sources/main.swift
+│   ├── resources/            # 预构建的 Swift helper 二进制
+│   ├── Cargo.toml
+│   └── tauri.conf.json
+├── build.sh                  # 一键构建脚本 (6 步验证)
+└── package.json
 ```
 
-### Key design patterns
+## Tauri 命令
 
-- **4-view flow**: `App.vue` switches between `idle` → `capture` → `selection` → `preview` views via a tabbed header.
-- **Swift helper process**: `camera_stream.rs` spawns the `ios_camera_stream` Swift executable as a child process. The helper runs an AVCaptureSession and serves an MJPEG stream over a local TCP socket (port 27183). The frontend consumes this stream via an `<img src="http://127.0.0.1:27183">` tag (multipart/x-mixed-replace). Photo capture is triggered by sending `"capture"` to the helper's stdin; saved HEIC files land in `/tmp/photobooth/`.
-- **Async Tauri commands**: All backend work runs via `tokio::task::block_in_place()` to avoid blocking the WebView thread.
-- **Executable lookup**: `utils::find_executable()` checks the app data dir first (`~/Library/Application Support/photobooth/`), then PATH — enables shipping bundled binaries (idevice_id, ffmpeg, ios_camera_stream).
-- **Template compositing**: One JSON config drives both frontend Canvas preview (via `calculate_cover_crop`) and backend FFmpeg filter graphs (object-fit: cover equivalent).
-- **OTA updates**: `updater.rs` fetches a JSON manifest, compares semver, downloads a zip, then `apply_update` renames the old `.app` aside, unzips the new bundle. `restart.rs` spawns a `nohup` survivor bash script that waits for the old process to exit, cleans up `.app.old`, and reopens the new app.
+| 命令 | 模块 | 功能 |
+|------|------|------|
+| `discover_devices` | camera.rs | 枚举已连接 iPhone |
+| `get_device_info` | camera.rs | 获取设备名称/版本 |
+| `start_camera` | stream.rs | 启动 MJPEG 预览流 |
+| `stop_camera` | stream.rs | 停止预览流 |
+| `is_camera_active` | stream.rs | 检查流状态 |
+| `capture_photo` | stream.rs | 拍照，返回文件路径 |
+| `read_photo` | photo.rs | 读取 JPEG → base64 |
+| `save_print_image` | photo.rs | 保存 base64 → 临时文件 |
+| `print_photo` | printer.rs | lpr 打印 |
+| `diagnose_connection` | lib.rs | 连接诊断 |
 
-## Common Commands
+## 关键设计
 
-### Development
+- **Swift helper 进程**：`stream.rs` 启动 `ios_camera_stream` 子进程，运行 AVCaptureSession 并在 `127.0.0.1:27183` 提供 MJPEG 流。前端通过 `<img src="http://127.0.0.1:27183">` 消费。拍照通过 stdin 发送 `"capture"`，JPEG 保存到 `/tmp/photobooth/`。
+- **无 FFmpeg 依赖**：照片为 JPEG 格式，直接读取 + base64 编码即可。
+- **Canvas 合成**：`PrintView.vue` 渲染高分辨率 Canvas (1200×1800)，object-fit: cover + CSS 滤镜，输出 → base64 → 临时文件 → lpr 打印。
+- **异步命令**：所有后端工作使用 `tokio::task::block_in_place()`。
+
+## 开发命令
 
 ```bash
-npm install                          # Install frontend dependencies
-npm run tauri:dev                    # Start Tauri dev server (Vue + WebView + Rust)
-npm run dev                          # Start Vue dev server only (Vite on :1420)
-npm run build                        # Build frontend only (type-check + Vite)
+npm install              # 安装前端依赖
+npm run tauri:dev        # 启动 Tauri 开发服务器
+npm run dev              # 仅 Vue 开发服务器 (:1420)
+npm run build            # 构建前端 (类型检查 + Vite)
+./build.sh               # 一键构建 (Swift + 前端 + Tauri + 验证)
 ```
 
-### Building the macOS app
+## 构建脚本 (build.sh)
 
-```bash
-# Prerequisites: Rust toolchain, Node.js, Tauri CLI, Xcode/Swift toolchain
-./build.sh                           # One-click: checks prereqs, builds frontend + Tauri bundle
-# or manually:
-npm run tauri:build                  # Build production macOS .app bundle
+6 步完整构建流程，每步含验证：
+1. 环境检查 (Node, npm, Rust, Swift, Xcode CLT)
+2. 构建 Swift 相机辅助工具 → 复制到 resources/
+3. 安装前端依赖
+4. 构建前端 (vue-tsc --noEmit + Vite)
+5. 构建 Tauri 后端 (cargo check + tauri build)
+6. 验证 .app 产物和内置相机辅助工具
 
-# Output: src-tauri/target/release/bundle/macos/
-```
+## 运行时依赖
 
-The `build.sh` pipeline:
-1. Checks for Node.js, Rust/Cargo, Tauri CLI, and code-signing certificates
-2. Runs `npm install` (if `node_modules` missing)
-3. Runs `npm run build` → compiles Vue/TS to `src-tauri/gen/`
-4. Runs `tauri build` → compiles Rust backend + bundles into `.app`/`.dmg`
+需在 PATH 或应用数据目录 (`~/Library/Application Support/photobooth/`) 提供：
+- **libimobiledevice** — `idevice_id` + `ideviceinfo` (macOS: `brew install libimobiledevice`)
+- **ios_camera_stream** — Swift 相机辅助工具 (由 build.sh 构建并打包)
 
-### Building the Swift camera helper
+## 重要说明
 
-```bash
-cd src-tauri/ios_camera_stream
-swift build -c release               # Build the ios_camera_stream executable
-# Copy the built binary to src-tauri/resources/ios_camera_stream for bundling
-```
+- 前端产物输出到 `src-tauri/gen/`
+- CSP 允许 `http://127.0.0.1:27183` (MJPEG 预览)
+- 应用数据目录：`~/Library/Application Support/photobooth/`
+- 临时照片目录：`/tmp/photobooth/`
+- MJPEG 预览端口：`127.0.0.1:27183`
+- 应用标识：`com.photobooth.app`，窗口标题：`大头贴`
 
-### TypeScript type-checking
+## 反模式（禁止）
 
-```bash
-npx vue-tsc --noEmit                 # Standalone type check
-```
-
-## Dependencies
-
-### Frontend (package.json)
-- **Runtime**: Vue 3.5+, Pinia 2.3, Ant Design Vue 4.2 (`@ant-design/icons-vue`), Tailwind CSS 4.3 (`@tailwindcss/postcss`), `@tauri-apps/*` plugins (api, http, shell, dialog, fs, opener)
-- **Dev**: Vite 6.2, @vitejs/plugin-vue 5.2, TypeScript 5.8, vue-tsc 2.2, @tauri-apps/cli 2.5
-
-### Backend (Cargo.toml)
-- **Tauri**: tauri 2, tauri-plugin-opener/http/dialog/fs 2
-- **Async**: tokio (full), reqwest 0.12
-- **Serialization**: serde (derive), serde_json
-- **Utilities**: uuid v4, chrono, base64, dirs 6, log, once_cell, thiserror 2, semver 1
-- **Windows only**: windows 0.60 (Win32 API — legacy, not used in iOS flow)
-
-## Build Prerequisites
-
-The app requires external binaries available on PATH or in the app data dir (`~/Library/Application Support/photobooth/`):
-- **libimobiledevice** — `idevice_id` (device discovery) and `ideviceinfo` (device info). macOS: `brew install libimobiledevice`
-- **ffmpeg** — Media processing (transcoding, compositing, probing, thumbnail extraction). macOS: `brew install ffmpeg`
-- **ios_camera_stream** — The Swift camera helper (built from `src-tauri/ios_camera_stream/`, bundled in `src-tauri/resources/`)
-
-These are not bundled as npm/Cargo deps — they must be installed on the target machine or shipped in the app data directory / resources.
-
-## Important Notes
-
-- The frontend outputs to `src-tauri/gen/` (configured in both `vite.config.ts` and `tauri.conf.json`)
-- Tauri dev server listens on `0.0.0.0:1420`
-- CSP allows `unsafe-inline` for styles and scripts, and `http://127.0.0.1:27183` for MJPEG preview images
-- App data dir: `~/Library/Application Support/photobooth/` (used for bundled binaries, update staging, restart helper script)
-- Assets dir: `~/Desktop/photobooth-assets/` (macOS) — where composite outputs are saved
-- Captured photos are written to `/tmp/photobooth/` as HEIC files
-- The MJPEG preview stream is served on `127.0.0.1:27183` by the Swift helper
-- OTA updates are sourced from the latest GitHub release. Repo configurable via env var `PHOTOBOOTH_GITHUB_REPO` (format: `owner/repo`)
-- App identifier: `com.photobooth.app`, window title: `大头贴`
+- `as any`、`@ts-ignore`、`@ts-expect-error`
+- Rust 生产代码中使用 `unwrap()` 或 `panic!`
+- 阻塞 WebView 线程的同步 I/O
+- 硬编码路径（使用 `utils::find_executable` / Tauri `resolve_path`）

@@ -1,6 +1,7 @@
-// iOS Camera Stream Helper (macOS)
-// 通过 macOS 内置摄像头或 Continuity Camera 实现取景预览和拍照
-// 使用 AVFoundation 直接访问摄像头，MJPEG 推流到本地 TCP 端口
+// 相机辅助工具 (macOS)
+// 使用 AVFoundation 访问 iPhone (Continuity Camera) 或内置摄像头
+// 提供 MJPEG 实时预览流 + JPEG 拍照捕获
+// 由 Rust 后端 (stream.rs) 作为子进程启动，通过 stdin/stdout 通信
 
 import Foundation
 import AVFoundation
@@ -120,11 +121,11 @@ class MJPEGStreamer {
     }
 }
 
-// MARK: - 视频帧委托 (macOS 兼容)
+// MARK: - 视频帧委托
 class VideoDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     let frameCallback: (Data?) -> Void
 
-    init(frameQueue: DispatchQueue, callback: @escaping (Data?) -> Void) {
+    init(callback: @escaping (Data?) -> Void) {
         self.frameCallback = callback
     }
 
@@ -134,7 +135,7 @@ class VideoDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { releasePixelBuffer() }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = try? CIContext(options: [:]).createCGImage(ciImage, from: ciImage.extent) else { return }
+        guard let cgImage = CIContext(options: [:]).createCGImage(ciImage, from: ciImage.extent) else { return }
         if let jpeg = cgImage.jpegData(compressionQuality: 0.7) {
             frameCallback(jpeg)
         }
@@ -212,13 +213,10 @@ func main() {
         Thread.sleep(forTimeInterval: 2.0)
     }
 
-    // 构建设备类型：macOS 13.4+ 包含 .external 以发现 iPhone (Continuity Camera)
-    let deviceTypes: [AVCaptureDevice.DeviceType]
-    if #available(macOS 13.4, *) {
-        deviceTypes = [.external, .builtInWideAngleCamera]
-    } else {
-        deviceTypes = [.builtInWideAngleCamera]
-    }
+    // 构建设备类型：使用内置广角摄像头发现所有相机（含 Continuity Camera）
+    // 注：.external 是 macOS 14.0+ API，为兼容更低版本统一用 builtInWideAngleCamera，
+    // 再通过设备名称识别 iPhone (Continuity Camera)
+    let deviceTypes: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
 
     let discovery = AVCaptureDevice.DiscoverySession(
         deviceTypes: deviceTypes,
@@ -230,12 +228,12 @@ func main() {
     var captureDevice: AVCaptureDevice? = nil
     for _ in 0..<15 {
         let devices = discovery.devices
-        // 优先级 1: iPhone (名称含 "iphone")
+        // 优先级 1: iPhone (Continuity Camera，设备名通常含 "iphone")
         captureDevice = devices.first { d in
             d.localizedName.lowercased().contains("iphone")
         }
-        // 优先级 2: 任何 external 设备 (macOS 13.4+)
-        if captureDevice == nil, #available(macOS 13.4, *) {
+        // 优先级 2: macOS 14.0+ 的 .external 类型设备
+        if captureDevice == nil, #available(macOS 14.0, *) {
             captureDevice = devices.first { $0.deviceType == .external }
         }
         // 优先级 3: 内置前置摄像头 (fallback)
@@ -284,7 +282,7 @@ func main() {
     var lastFrame: Data?
     let frameQueue = DispatchQueue(label: "photobooth.frame.queue")
 
-    let videoDelegate = VideoDelegate(frameQueue: frameQueue) { frame in
+    let videoDelegate = VideoDelegate { frame in
         frameQueue.sync { lastFrame = frame }
     }
     videoOutput.setSampleBufferDelegate(videoDelegate, queue: frameQueue)

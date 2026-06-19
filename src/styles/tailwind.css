@@ -36,3 +36,9 @@
   /* Font Family */
   --font-family-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
+
+/* Vertically center icon + text inside buttons */
+.ant-btn {
+  display: inline-flex;
+  align-items: center;
+}

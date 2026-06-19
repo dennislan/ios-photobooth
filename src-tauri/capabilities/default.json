@@ -1,12 +1,8 @@
 {
   "identifier": "default",
-  "description": "Default capability for the photobooth app",
+  "description": "大头贴核心功能权限",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "opener:default",
-    "http:default",
-    "dialog:default",
-    "fs:default"
+    "core:default"
   ]
 }

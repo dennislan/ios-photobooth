@@ -1,7 +1,7 @@
 {
   "name": "photobooth",
   "version": "1.0.0",
-  "description": "线下门店大头贴拍照体验系统",
+  "description": "大头贴 — 使用 iPhone 作为外接相机的 macOS 拍照打印应用",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,11 +15,6 @@
     "@ant-design/icons-vue": "^7.0.1",
     "@tailwindcss/postcss": "^4.3.1",
     "@tauri-apps/api": "^2.5.0",
-    "@tauri-apps/plugin-dialog": "^2.0.0",
-    "@tauri-apps/plugin-fs": "^2.0.0",
-    "@tauri-apps/plugin-http": "^2.0.0",
-    "@tauri-apps/plugin-opener": "^2.0.0",
-    "@tauri-apps/plugin-shell": "^2.0.0",
     "ant-design-vue": "^4.2.6",
     "pinia": "^2.3.0",
     "postcss": "^8.5.15",

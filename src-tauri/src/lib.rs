@@ -49,10 +49,88 @@ async fn get_photo_thumbnail(
 
 #[tauri::command]
 async fn take_photo(device_id: String) -> Result<String, String> {
-    // 验证设备可达
-    let _ = ios_camera::get_device_display_name(&device_id).await?;
-    // 通过 camera_stream 的 stdin 发送 capture 命令，等待 Swift 进程写入并返回真实路径
+    // 验证设备可达且已配对（替代原先无效的 idevice_id -u -t）
+    let _ = tokio::task::block_in_place(|| crate::ios_camera::verify_device(&device_id))?;
+    // 通过 camera_stream 的 stdin 发送 capture 命令，等待真实文件路径
     camera_stream::capture_photo().await
+}
+
+/// 连接诊断 — 返回环境与设备状态的完整报告，供前端展示排查指引
+#[tauri::command]
+async fn diagnose_connection() -> Result<serde_json::Value, String> {
+    use tokio::task;
+
+    // 1. libimobiledevice 是否安装
+    let idevice_ok = crate::utils::find_executable("idevice_id").is_some();
+    let ideviceinfo_ok = crate::utils::find_executable("ideviceinfo").is_some();
+
+    // 2. 已连接设备列表（USB 枚举）
+    let devices: Vec<String> = if idevice_ok {
+        crate::ios_camera::get_device_list().await.unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    // 3. 每个设备的配对状态
+    let device_status: Vec<serde_json::Value> = devices
+        .iter()
+        .map(|d| {
+            let pair_result = task::block_in_place(|| crate::ios_camera::verify_device(d));
+            let (paired, name, error) = match pair_result {
+                Ok(n) => (true, n, String::new()),
+                Err(e) => (false, String::new(), e),
+            };
+            serde_json::json!({
+                "id": d,
+                "id_short": d.chars().take(8).collect::<String>(),
+                "paired": paired,
+                "name": name,
+                "error": error,
+            })
+        })
+        .collect();
+
+    // 4. ffmpeg / ffprobe
+    let ffmpeg_ok = crate::utils::find_executable("ffmpeg").is_some();
+    let ffprobe_ok = crate::utils::find_executable("ffprobe").is_some();
+
+    // 5. 相机辅助工具
+    let helper_ok = camera_stream::find_camera_stream_helper().is_some();
+
+    // 6. macOS 版本（判断是否支持 Continuity Camera，需 13.0+）
+    let macos_version = task::block_in_place(|| -> String {
+        std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    });
+
+    // 7. 端口 27183 占用情况
+    let port_in_use = task::block_in_place(|| -> bool {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("lsof -ti tcp:27183 >/dev/null 2>&1")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    });
+
+    Ok(serde_json::json!({
+        "idevice_id_installed": idevice_ok,
+        "ideviceinfo_installed": ideviceinfo_ok,
+        "ffmpeg_installed": ffmpeg_ok,
+        "ffprobe_installed": ffprobe_ok,
+        "helper_found": helper_ok,
+        "macos_version": macos_version,
+        "continuity_camera_supported": {
+            "version": macos_version.clone(),
+            "supported": macos_version.split('.').nth(0).and_then(|s| s.parse::<u32>().ok()).map(|major| major >= 13).unwrap_or(false),
+        },
+        "devices": device_status,
+        "port_27183_in_use": port_in_use,
+    }))
 }
 
 #[tauri::command]
@@ -232,6 +310,7 @@ pub fn main() {
             find_idevice_path,
             save_temp_image,
             write_image_file,
+            diagnose_connection,
             parse_deep_link,
             check_for_updates,
             apply_update,

@@ -26,6 +26,81 @@ fn init_cache() -> std::sync::MutexGuard<'static, Option<HashMap<String, (Device
 
 const DEVICE_INFO_CACHE_TTL: Duration = Duration::from_secs(30);
 
+/// 验证设备是否真正可达且已配对（信任此电脑）
+/// 用 ideviceinfo -u <udid> -k DeviceName 真正发起连接，
+/// 能区分「设备未连接」「未信任」「配对锁」三种状态
+pub fn verify_device(device_id: &str) -> Result<String, String> {
+    let _ = find_idevice_id_path()?;
+
+    // 1) 先用 idevice_id -l 确认设备在列表中（USB 枚举层）
+    let list_output = task::block_in_place(|| -> Result<std::process::Output, String> {
+        Command::new("idevice_id")
+            .arg("-l")
+            .output()
+            .map_err(|e| format!("运行 idevice_id 失败: {}", e))
+    })?;
+
+    if !list_output.status.success() {
+        return Err("无法枚举设备，libimobiledevice 可能未正确安装。".to_string());
+    }
+
+    let list_text = String::from_utf8_lossy(&list_output.stdout);
+    let connected: Vec<&str> = list_text
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    if connected.is_empty() {
+        return Err(
+            "未检测到 iPhone 设备。\n\n请检查:\n\
+             1. iPhone 通过 USB 数据线连接到电脑\n\
+             2. iPhone 已解锁并亮屏\n\
+             3. 尝试更换 USB 数据线或端口\n\
+             4. 确保已安装 libimobiledevice: brew install libimobiledevice".to_string()
+        );
+    }
+
+    if !connected.iter().any(|d| *d == device_id) {
+        return Err(format!(
+            "目标设备 {} 不在已连接列表中。\n当前连接的设备: {}",
+            device_id.chars().take(8).collect::<String>(),
+            connected
+                .iter()
+                .map(|d| d.chars().take(8).collect::<String>())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    // 2) 用 ideviceinfo 真正验证配对状态（应用层连接）
+    let info_tool = find_imobiledevice_bin("ideviceinfo")?;
+    let info_output = task::block_in_place(|| -> Result<std::process::Output, String> {
+        Command::new(&info_tool)
+            .args(["-u", device_id, "-k", "DeviceName"])
+            .output()
+            .map_err(|e| format!("运行 ideviceinfo 失败: {}", e))
+    })?;
+
+    if !info_output.status.success() {
+        let stderr = String::from_utf8_lossy(&info_output.stderr);
+        // 常见错误: "ERROR: Could not connect to lockdownd" → 未信任
+        //          "No device found" → USB 断开
+        if stderr.contains("lockdownd") || stderr.contains("pair") {
+            return Err(
+                "iPhone 未信任此电脑。\n\n请在 iPhone 屏幕上点击「信任此电脑」并输入密码，然后重试。".to_string()
+            );
+        }
+        if stderr.contains("No device") || stderr.contains("not found") {
+            return Err("设备 USB 连接已断开，请重新插拔数据线。".to_string());
+        }
+        return Err(format!("无法连接到设备: {}", stderr.trim()));
+    }
+
+    let name = String::from_utf8_lossy(&info_output.stdout).trim().to_string();
+    Ok(name)
+}
+
 /// 查找 idevice_id 路径
 pub fn find_idevice_id_path() -> Result<String, String> {
     crate::utils::find_executable("idevice_id")
@@ -146,22 +221,9 @@ pub async fn get_device_info(device_id: &str) -> Result<DeviceInfo, String> {
 // 注意: lib.rs 的 take_photo 命令直接调用 camera_stream::capture_photo()
 #[allow(dead_code)]
 pub async fn take_photo(device_id: &str) -> Result<String, String> {
-    // 通知 camera_stream 进程执行拍照
-    let output = task::block_in_place(|| -> Result<std::process::Output, String> {
-        Command::new("idevice_id")
-            .args(["-u", device_id, "-t"]) // -t 测试连接
-            .output()
-            .map_err(|e| format!("Failed to connect to device: {}", e))
-    })?;
-
-    if !output.status.success() {
-        return Err("无法连接到 iPhone。请在 iPhone 上点击「信任此电脑」。".to_string());
-    }
-
-    // 拍照动作由 camera_stream 进程处理
-    // 这里返回成功，实际文件路径由 camera_stream 写入后返回
-    // 暂时通过 ideviceinfo 确认设备在线
-    Ok(format!("/tmp/photobooth/photo_{}.heic", uuid::Uuid::new_v4()))
+    // 先验证设备可达且已配对（用 verify_device 替代无效的 idevice_id -u -t）
+    let name = task::block_in_place(|| verify_device(device_id))?;
+    Ok(format!("{} ({})", name, device_id.chars().take(8).collect::<String>()))
 }
 
 /// 获取照片缩略图 (本地文件)
@@ -197,6 +259,7 @@ pub async fn get_photo_thumbnail(
 }
 
 /// 获取设备名称用于显示
+#[allow(dead_code)]
 pub async fn get_device_display_name(device_id: &str) -> Result<String, String> {
     let info = get_device_info(device_id).await?;
     if !info.model.is_empty() {

@@ -199,31 +199,77 @@ func main() {
     let session = AVCaptureSession()
     session.sessionPreset = .high
 
-    // 查找摄像头设备 (优先前置/Continuity Camera)
+    // 请求相机授权（helper 继承父 .app 的 TCC 权限，此处做防御性检查）
+    let authStatus = AVCaptureDevice.authorizationStatus(for: .video)
+    if authStatus == .denied || authStatus == .restricted {
+        print("ERR:相机权限被拒绝。请在「系统设置 > 隐私与安全 > 相机」中允许大头贴，然后重启应用。")
+        fflush(stdout)
+        Thread.sleep(forTimeInterval: 0.3)
+        exit(1)
+    }
+    if authStatus == .notDetermined {
+        AVCaptureDevice.requestAccess(for: .video) { _ in }
+        Thread.sleep(forTimeInterval: 2.0)
+    }
+
+    // 构建设备类型：macOS 13.4+ 包含 .external 以发现 iPhone (Continuity Camera)
+    let deviceTypes: [AVCaptureDevice.DeviceType]
+    if #available(macOS 13.4, *) {
+        deviceTypes = [.external, .builtInWideAngleCamera]
+    } else {
+        deviceTypes = [.builtInWideAngleCamera]
+    }
+
     let discovery = AVCaptureDevice.DiscoverySession(
-        deviceTypes: [.builtInWideAngleCamera],
+        deviceTypes: deviceTypes,
         mediaType: .video,
         position: .unspecified
     )
 
-    // 优先使用前置/外部摄像头
-    let device = discovery.devices.first { $0.position == .front }
-        ?? discovery.devices.first
+    // Continuity Camera 可能需要几秒才被发现，轮询等待
+    var captureDevice: AVCaptureDevice? = nil
+    for _ in 0..<15 {
+        let devices = discovery.devices
+        // 优先级 1: iPhone (名称含 "iphone")
+        captureDevice = devices.first { d in
+            d.localizedName.lowercased().contains("iphone")
+        }
+        // 优先级 2: 任何 external 设备 (macOS 13.4+)
+        if captureDevice == nil, #available(macOS 13.4, *) {
+            captureDevice = devices.first { $0.deviceType == .external }
+        }
+        // 优先级 3: 内置前置摄像头 (fallback)
+        if captureDevice == nil {
+            captureDevice = devices.first { $0.position == .front }
+        }
+        // 优先级 4: 任意可用设备
+        if captureDevice == nil {
+            captureDevice = devices.first
+        }
+        if captureDevice != nil { break }
+        Thread.sleep(forTimeInterval: 0.5)
+    }
 
-    guard let device = device else {
-        print("No camera found")
+    guard let device = captureDevice else {
+        print("ERR:未发现任何摄像头。请确认:1) iPhone 已通过 USB 连接并解锁;2) iPhone 与 Mac 登录同一 Apple ID;3) 在 iPhone「控制中心」启用「连续互通相机」。")
+        fflush(stdout)
+        Thread.sleep(forTimeInterval: 0.3)
         exit(1)
     }
 
-    print("Using camera: \(device.localizedName)")
+    fputs("Using camera: \(device.localizedName)\n", stderr)
 
     guard let videoInput = try? AVCaptureDeviceInput(device: device) else {
-        print("Failed to create video input")
+        print("ERR:无法创建视频输入，摄像头可能被其他应用占用。")
+        fflush(stdout)
+        Thread.sleep(forTimeInterval: 0.3)
         exit(1)
     }
 
     guard session.canAddInput(videoInput) else {
-        print("Cannot add video input")
+        print("ERR:无法添加视频输入到捕获会话。")
+        fflush(stdout)
+        Thread.sleep(forTimeInterval: 0.3)
         exit(1)
     }
     session.addInput(videoInput)

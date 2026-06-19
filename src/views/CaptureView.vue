@@ -158,7 +158,8 @@ async function startCamera() {
     const { invoke } = await import("@tauri-apps/api/core")
     const devices: string[] = await invoke("get_device_list")
     if (devices.length === 0) {
-      alert("未检测到设备，请检查 USB 连接")
+      // 触发诊断，给出精准指引
+      await showDiagnostics(invoke)
       return
     }
     deviceId.value = devices[0]
@@ -169,7 +170,71 @@ async function startCamera() {
       deviceId: devices[0],
     })
   } catch (e) {
-    alert(e instanceof Error ? e.message : String(e))
+    const msg = e instanceof Error ? e.message : String(e)
+    const { invoke } = await import("@tauri-apps/api/core")
+    await showDiagnostics(invoke, msg)
+  }
+}
+
+/// 调用后端诊断命令，把环境状态汇总展示给用户
+async function showDiagnostics(invoke: any, prefix?: string) {
+  try {
+    const report = await invoke("diagnose_connection")
+    const lines: string[] = []
+    if (prefix) lines.push(prefix, "")
+    lines.push("【连接诊断】", "")
+
+    if (report.idevice_id_installed === false) {
+      lines.push("✗ 未安装 libimobiledevice (idevice_id)")
+      lines.push("  请运行: brew install libimobiledevice")
+    } else {
+      lines.push("✓ libimobiledevice 已安装")
+    }
+
+    if (report.ffmpeg_installed === false) {
+      lines.push("✗ 未安装 ffmpeg")
+      lines.push("  请运行: brew install ffmpeg")
+    } else {
+      lines.push("✓ ffmpeg 已安装")
+    }
+
+    if (report.helper_found === false) {
+      lines.push("✗ 未找到相机辅助工具 ios_camera_stream")
+      lines.push("  请构建: cd src-tauri/ios_camera_stream && swift build -c release")
+      lines.push("  并复制到: src-tauri/resources/ios_camera_stream")
+    } else {
+      lines.push("✓ 相机辅助工具就绪")
+    }
+
+    if (report.continuity_camera_supported?.supported === false) {
+      lines.push(`✗ macOS 版本 ${report.macos_version} 不支持连续互通相机 (需 13.0+)`)
+    } else {
+      lines.push(`✓ macOS ${report.macos_version} 支持连续互通相机`)
+    }
+
+    const devices = report.devices || []
+    if (devices.length === 0) {
+      lines.push("✗ 未检测到通过 USB 连接的 iPhone")
+      lines.push("  请: 1) 用数据线连接 iPhone; 2) 解锁 iPhone; 3) 点击「信任此电脑」")
+    } else {
+      lines.push(`✓ 检测到 ${devices.length} 台设备:`)
+      devices.forEach((d: any) => {
+        if (d.paired) {
+          lines.push(`  • ${d.id_short} (${d.name}) — 已配对`)
+        } else {
+          lines.push(`  • ${d.id_short} — 未配对: ${d.error}`)
+        }
+      })
+    }
+
+    if (report.port_27183_in_use === true) {
+      lines.push("⚠ 预览端口 27183 被占用，请关闭占用进程或重启应用")
+    }
+
+    lines.push("", "如问题仍存在，请检查系统「隐私与安全 > 相机」是否已授权。")
+    alert(lines.join("\n"))
+  } catch {
+    alert(prefix || "连接失败且诊断不可用")
   }
 }
 

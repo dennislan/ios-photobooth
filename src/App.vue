@@ -26,14 +26,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted } from 'vue';
 import { SettingOutlined, CameraOutlined } from '@ant-design/icons-vue';
 import CaptureView from './views/CaptureView.vue';
 import SelectView from './views/SelectView.vue';
 import PrintView from './views/PrintView.vue';
 import SettingsModal from './components/SettingsModal.vue';
+import { useCameraStore } from './stores/camera';
 
 type ViewName = 'capture' | 'select' | 'print';
 const currentView = ref<ViewName>('capture');
 const showSettings = ref(false);
+const cameraStore = useCameraStore();
+
+// 打开 app 后自动连接 iPhone
+onMounted(() => {
+  cameraStore.connect();
+});
 </script>

@@ -69,10 +69,13 @@ pub async fn start(device_id: String) -> Result<String, String> {
         guard.last_capture = None;
     }
 
-    // 5) 启动 helper 子进程（传入 device_id）
+    // 5) 启动 helper 子进程（传入 device_id 和 device_name）
+    //    device_name 用于 Swift 侧匹配 AVFoundation Continuity Camera 设备，
+    //    避免 libimobiledevice (USB) 与 AVFoundation (Continuity) 两套标识体系脱节。
     let mut child = task::block_in_place(|| -> Result<Child, String> {
         Command::new(&helper_path)
             .arg(&device_id)
+            .arg(&device_name)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

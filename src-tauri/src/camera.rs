@@ -55,6 +55,7 @@ fn find_tool(name: &str) -> Result<String, String> {
 // ── 公共 API ──
 
 /// 枚举通过 USB 连接的 iPhone 设备列表
+/// 返回 Ok(设备列表) —— 空列表表示没有检测到设备（不报错）
 pub async fn list_devices() -> Result<Vec<String>, String> {
     let idevice_id = find_tool("idevice_id")?;
 
@@ -77,17 +78,7 @@ pub async fn list_devices() -> Result<Vec<String>, String> {
         .map(|l| l.to_string())
         .collect();
 
-    if devices.is_empty() {
-        return Err(
-            "未检测到 iPhone 设备。\n\n请检查：\n\
-             1. iPhone 通过 USB 数据线连接到电脑\n\
-             2. iPhone 已解锁并亮屏\n\
-             3. iPhone 上已点击「信任此电脑」\n\
-             4. 已安装 libimobiledevice：brew install libimobiledevice"
-                .to_string(),
-        );
-    }
-
+    // 返回空列表而非错误，由前端决定如何处理（弹出内置摄像头选项等）
     Ok(devices)
 }
 

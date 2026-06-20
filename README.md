@@ -18,7 +18,7 @@
 - **🔄 OTA 在线更新** — 基于 Semver 版本比较的自动更新机制，支持原地替换 `.app` 包并自动重启
 
 ### 技术亮点
-- **四视图流程架构** — 待机 → 拍摄 → 选片 → 预览打印的无缝切换体验
+- **三视图流程架构** — 拍摄 → 选片 → 预览打印的无缝切换体验
 - **异步后端处理** — 全链路 `tokio` 异步执行，确保 WebView 线程永不阻塞
 - **Deep Link 支持** — 注册 `photobooth://` URL Scheme，支持外部唤起
 - **可扩展资源查找** — 优先加载应用数据目录内的二进制文件（`idevice_id`、`ffmpeg`、`ios_camera_stream`），支持离线部署
@@ -199,7 +199,6 @@ ios-photobooth/
 │   │   ├── template.ts               # 模板配置与合成状态
 │   │   └── update.ts                 # OTA 更新状态机
 │   ├── components/                   # 公共组件
-│   │   ├── IdleView.vue              # 待机屏幕
 │   │   ├── SettingsPanel.vue         # 设置面板
 │   │   └── UpdateBanner.vue          # 更新通知栏
 │   ├── views/                        # 页面视图

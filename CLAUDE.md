@@ -22,12 +22,11 @@
 photobooth/
 ├── src/                      # Vue 3 前端
 │   ├── main.ts               # 入口
-│   ├── App.vue               # 根组件 — 4 视图路由 (welcome→capture→select→print)
+│   ├── App.vue               # 根组件 — 3 视图路由 (capture→select→print)
 │   ├── stores/
 │   │   ├── capture.ts        # 照片、布局、滤镜、选片、打印设置
 │   │   └── camera.ts         # 相机连接状态
 │   ├── components/
-│   │   ├── WelcomeScreen.vue # 待机屏
 │   │   └── SettingsModal.vue # 设置弹窗
 │   ├── views/
 │   │   ├── CaptureView.vue   # 实时预览 + 拍照

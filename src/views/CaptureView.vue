@@ -11,7 +11,7 @@
         <p class="text-lg font-medium text-text-primary mb-2">连接 iPhone</p>
         <p class="text-sm text-text-secondary mb-6">通过 USB 连接 iPhone 作为外接相机</p>
         <a-button
-          v-if="!deviceId"
+          v-if="!deviceId && !showFallbackOption"
           type="primary"
           size="large"
           :loading="connecting"
@@ -20,7 +20,27 @@
           <template #icon><ScanOutlined /></template>
           连接手机
         </a-button>
-        <div v-else class="flex flex-col items-center gap-3">
+        <div v-if="!deviceId && showFallbackOption" class="flex flex-col items-center gap-3">
+          <p class="text-sm text-text-secondary mb-1">未检测到 iPhone 设备</p>
+          <a-button
+            type="primary"
+            size="large"
+            :loading="connecting"
+            @click="startBuiltInCamera"
+          >
+            <template #icon><CameraOutlined /></template>
+            使用 Mac 内置摄像头
+          </a-button>
+          <a-button
+            v-if="hasLibMobileDevice"
+            type="default"
+            size="large"
+            @click="showFallbackOption = false; startCamera()"
+          >
+            我有 iPhone，重新检测
+          </a-button>
+        </div>
+        <div v-else-if="deviceId" class="flex flex-col items-center gap-3">
           <a-tag color="blue">设备: {{ deviceId.slice(0, 8) }}…</a-tag>
           <a-button type="primary" size="large" :loading="connecting" @click="startCamera">
             <template #icon><ScanOutlined /></template>
@@ -38,8 +58,8 @@
           alt="相机预览"
         />
         <a-badge
-          status="processing"
-          text="预览中"
+          :status="cameraStore.state.useBuiltInCamera ? 'warning' : 'processing'"
+          :text="cameraStore.state.useBuiltInCamera ? '内置摄像头' : '预览中'"
           class="absolute top-3 right-3"
         />
       </div>
@@ -137,7 +157,7 @@ import {
   CloseOutlined,
   ArrowRightOutlined,
 } from '@ant-design/icons-vue';
-import { ref, computed, onUnmounted } from 'vue';
+import { ref, computed, onUnmounted, h } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { message, Modal } from 'ant-design-vue';
 import {
@@ -159,6 +179,8 @@ const cameraStore = useCameraStore();
 const deviceId = ref('');
 const connecting = ref(false);
 const capturing = ref(false);
+const showFallbackOption = ref(false);
+const hasLibMobileDevice = ref(true);
 const mjpegUrl = 'http://127.0.0.1:27183';
 
 const layouts = LAYOUTS;
@@ -168,29 +190,186 @@ const filterLabels = FILTER_LABELS;
 const isCameraRunning = computed(() => cameraStore.isConnected);
 const previewFilter = computed(() => FILTER_CSS[captureStore.filter]);
 
+/** 设备信息（用于选择弹窗） */
+interface DeviceEntry {
+  id: string;
+  name: string;
+  shortId: string;
+}
+
 /** 连接 iPhone 相机 */
 async function startCamera() {
   connecting.value = true;
   message.loading({ content: '正在连接 iPhone...', key: 'camera', duration: 0 });
   try {
-    const devices = (await invoke('discover_devices')) as string[];
+    console.log('[CaptureView] startCamera: 开始枚举设备');
+    const devicesRaw = await invoke<string[]>('discover_devices');
+    const devices: string[] = devicesRaw;
+    console.log(`[CaptureView] discover_devices: 找到 ${devices.length} 台设备`, devices);
+
+    // 2) 没有 iPhone → 提示内置摄像头
     if (devices.length === 0) {
+      console.log('[CaptureView] startCamera: 未检测到 iPhone，显示内置摄像头选项');
+      showFallbackOption.value = true;
       message.destroy('camera');
-      await showDiagnostics();
       return;
     }
+
+    // 3) 多个 iPhone → 弹出选择弹窗
+    if (devices.length > 1) {
+      console.log('[CaptureView] startCamera: 检测到多台 iPhone，弹出选择');
+      await showDeviceSelector(devices);
+      connecting.value = false;
+      return;
+    }
+
+    // 4) 单台 iPhone → 直接连接
     deviceId.value = devices[0];
-    await invoke('start_camera', { deviceId: devices[0] });
+    console.log(`[CaptureView] startCamera: 准备连接设备 ${devices[0].slice(0, 8)}...`);
+    const result = await invoke('start_camera', { deviceId: devices[0] });
+    console.log(`[CaptureView] start_camera 返回:`, result);
     cameraStore.setState({
       connected: true,
       running: true,
       deviceId: devices[0],
+      deviceName: '',
+      useBuiltInCamera: false,
     });
     message.success({ content: 'iPhone 已连接', key: 'camera', duration: 2 });
   } catch (e) {
     message.destroy('camera');
     const msg = e instanceof Error ? e.message : String(e);
-    await showDiagnostics(msg);
+    console.error('[CaptureView] startCamera 失败:', msg);
+    // 如果是 "未找到 idevice_id" 错误，说明 libimobiledevice 未安装
+    if (msg.includes('未找到') && msg.includes('idevice_id')) {
+      hasLibMobileDevice.value = false;
+      showFallbackOption.value = true;
+    }
+    // 如果错误来自 Swift helper（包含 "未检测到 iPhone 相机" 或 "相机启动失败"），
+    // 直接显示错误消息，不再跑诊断（Swift 已经给出了完整解释）
+    else if (msg.includes('未检测到 iPhone 相机') || msg.includes('相机启动失败')) {
+      Modal.error({
+        title: '连接失败',
+        content: msg,
+        width: 600,
+      });
+    } else {
+      await showDiagnostics(msg);
+    }
+  } finally {
+    connecting.value = false;
+  }
+}
+
+/** 弹出设备选择弹窗 */
+async function showDeviceSelector(deviceIds: string[]) {
+  // 批量获取设备信息
+  const entries: DeviceEntry[] = [];
+  for (const id of deviceIds) {
+    try {
+      const info = await invoke<Record<string, any>>('get_device_info', { deviceId: id });
+      entries.push({
+        id,
+        name: info.name as string || `iPhone (${id.slice(0, 8)})`,
+        shortId: id.slice(0, 8),
+      });
+    } catch {
+      entries.push({
+        id,
+        name: `iPhone (${id.slice(0, 8)})`,
+        shortId: id.slice(0, 8),
+      });
+    }
+  }
+
+  return new Promise<void>((resolve) => {
+    const instance = Modal.confirm({
+      title: '检测到多台 iPhone',
+      content: h('div', [
+        h('p', { class: 'mb-2' }, '请选择要连接的设备：'),
+        ...entries.map((e) =>
+          h('div', {
+            class: 'flex items-center gap-2 py-1.5 cursor-pointer hover:bg-gray-50 rounded px-2 -mx-2',
+            onClick: () => {
+              instance.destroy();
+              connectToDevice(e.id);
+              resolve();
+            },
+          }, [
+            h('span', { class: 'text-sm' }, e.name),
+            h('span', {
+              class: 'text-xs text-gray-400 ml-auto',
+            }, e.shortId),
+          ]),
+        ),
+      ]),
+      closable: true,
+      maskClosable: true,
+      width: 420,
+    });
+  });
+}
+
+/** 连接到指定设备 */
+async function connectToDevice(deviceIdToConnect: string) {
+  console.log(`[CaptureView] connectToDevice: ${deviceIdToConnect.slice(0, 8)}`);
+  message.loading({ content: `正在连接...`, key: 'camera', duration: 0 });
+  try {
+    const result = await invoke('start_camera', { deviceId: deviceIdToConnect });
+    console.log(`[CaptureView] start_camera 返回:`, result);
+    cameraStore.setState({
+      connected: true,
+      running: true,
+      deviceId: deviceIdToConnect,
+      deviceName: '',
+      useBuiltInCamera: false,
+    });
+    message.success({ content: 'iPhone 已连接', key: 'camera', duration: 2 });
+  } catch (e) {
+    message.destroy('camera');
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[CaptureView] connectToDevice 失败:', msg);
+    if (msg.includes('未检测到 iPhone 相机') || msg.includes('相机启动失败')) {
+      Modal.error({
+        title: '连接失败',
+        content: msg,
+        width: 600,
+      });
+    } else {
+      await showDiagnostics(msg);
+    }
+  }
+}
+
+/** 使用 Mac 内置摄像头 */
+async function startBuiltInCamera() {
+  connecting.value = true;
+  message.loading({ content: '正在启动内置摄像头...', key: 'camera', duration: 0 });
+  try {
+    console.log('[CaptureView] startBuiltInCamera: 启动内置摄像头');
+    const result = await invoke('start_builtin_camera');
+    console.log(`[CaptureView] start_builtin_camera 返回:`, result);
+    cameraStore.setState({
+      connected: true,
+      running: true,
+      deviceId: '',
+      deviceName: 'Mac 内置摄像头',
+      useBuiltInCamera: true,
+    });
+    message.success({ content: '内置摄像头已启用', key: 'camera', duration: 2 });
+  } catch (e) {
+    message.destroy('camera');
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[CaptureView] startBuiltInCamera 失败:', msg);
+    if (msg.includes('未检测到 iPhone 相机') || msg.includes('相机启动失败')) {
+      Modal.error({
+        title: '连接失败',
+        content: msg,
+        width: 600,
+      });
+    } else {
+      await showDiagnostics(msg);
+    }
   } finally {
     connecting.value = false;
   }
@@ -263,7 +442,8 @@ async function takePhoto() {
   capturing.value = true;
   try {
     const devId = cameraStore.state.deviceId;
-    if (!devId) {
+    // 内置摄像头模式下 deviceId 为空，但仍可拍照
+    if (!devId && !cameraStore.state.useBuiltInCamera) {
       message.warning('请先连接设备');
       return;
     }

@@ -6,7 +6,6 @@
         <h1 class="text-xl font-bold text-text-primary m-0">大头贴</h1>
       </div>
       <a-tabs v-model:active-key="currentView" size="small">
-        <a-tab-pane key="welcome" tab="待机" />
         <a-tab-pane key="capture" tab="拍照" />
         <a-tab-pane key="select" tab="选片" />
         <a-tab-pane key="print" tab="打印" />
@@ -16,7 +15,6 @@
       </a-button>
     </header>
     <main class="flex-1 overflow-hidden relative" role="main">
-      <WelcomeScreen v-if="currentView === 'welcome'" @start="currentView = 'capture'" />
       <CaptureView v-if="currentView === 'capture'" @complete="currentView = 'select'" />
       <SelectView v-if="currentView === 'select'" @confirm="currentView = 'print'" @back="currentView = 'capture'" />
       <PrintView v-if="currentView === 'print'" @back="currentView = 'select'" />
@@ -30,13 +28,12 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { SettingOutlined, CameraOutlined } from '@ant-design/icons-vue';
-import WelcomeScreen from './components/WelcomeScreen.vue';
 import CaptureView from './views/CaptureView.vue';
 import SelectView from './views/SelectView.vue';
 import PrintView from './views/PrintView.vue';
 import SettingsModal from './components/SettingsModal.vue';
 
-type ViewName = 'welcome' | 'capture' | 'select' | 'print';
-const currentView = ref<ViewName>('welcome');
+type ViewName = 'capture' | 'select' | 'print';
+const currentView = ref<ViewName>('capture');
 const showSettings = ref(false);
 </script>

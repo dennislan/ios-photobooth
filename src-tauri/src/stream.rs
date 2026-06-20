@@ -69,7 +69,7 @@ pub async fn start(device_id: String) -> Result<String, String> {
         guard.last_capture = None;
     }
 
-    // 5) 启动 helper 子进程
+    // 5) 启动 helper 子进程（传入 device_id）
     let mut child = task::block_in_place(|| -> Result<Child, String> {
         Command::new(&helper_path)
             .arg(&device_id)
@@ -124,11 +124,12 @@ pub async fn start(device_id: String) -> Result<String, String> {
         }
     });
 
-    // 后台线程：读取 stderr 仅记录日志
+    // 后台线程：读取 stderr 并转发到 Rust log（info 级别，确保可见）
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().flatten() {
-            log::debug!("[ios_camera_stream] {}", line);
+            // 使用 log::info 确保在 dev run 时能看到
+            log::info!("[ios_camera_stream] {}", line);
         }
     });
 
@@ -174,6 +175,140 @@ pub async fn start(device_id: String) -> Result<String, String> {
                  1. 系统是否弹出了相机权限请求，请点击「允许」\n\
                  2. 系统设置 > 隐私与安全 > 相机，确认大头贴已勾选\n\
                  3. iPhone 是否解锁并亮屏，USB 连接稳定"
+                    .to_string(),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+/// 启动内置摄像头（无 iPhone 时的降级方案）
+///
+/// Swift helper 不接受 device_id 参数，内部会通过 AVCaptureDevice.DiscoverySession
+/// 自动选择前置摄像头作为 fallback。
+pub async fn start_builtin() -> Result<String, String> {
+    // 关闭可能残留的旧进程并释放端口
+    stop_internal();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // 1) 查找 Swift 辅助工具
+    let helper_path = find_helper().ok_or_else(|| {
+        "未找到相机辅助工具 ios_camera_stream。\n\
+         请先构建：cd src-tauri/ios_camera_stream && swift build -c release\n\
+         并复制到 src-tauri/resources/ios_camera_stream"
+            .to_string()
+    })?;
+
+    // 2) 预清理端口占用
+    free_port();
+
+    // 3) 重置状态
+    {
+        let mut guard = state().lock().map_err(|e| format!("锁错误: {}", e))?;
+        guard.signal = None;
+        guard.exited = false;
+        guard.last_capture = None;
+    }
+
+    // 4) 启动 helper 子进程（不传 device_id → Swift 自动选择内置摄像头）
+    let mut child = task::block_in_place(|| -> Result<Child, String> {
+        Command::new(&helper_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    format!(
+                        "启动相机辅助进程失败: {}\n\
+                         原因：辅助工具不可执行。请重新运行 ./build.sh，\n\
+                         或在终端执行：chmod +x \"{}\"",
+                        e, helper_path
+                    )
+                } else {
+                    format!("启动相机辅助进程失败: {}", e)
+                }
+            })
+    })?;
+
+    let stdin = child.stdin.take().ok_or("无法获取 helper stdin")?;
+    let stdout = child.stdout.take().ok_or("无法获取 helper stdout")?;
+    let stderr = child.stderr.take().ok_or("无法获取 helper stderr")?;
+
+    {
+        let mut guard = state().lock().map_err(|e| format!("锁错误: {}", e))?;
+        guard.stdin = Some(stdin);
+    }
+
+    // 后台线程：读取 stdout 捕获信号
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().flatten() {
+            let line = line.trim().to_string();
+            if line.starts_with("STREAM_READY")
+                || line.starts_with("CAPTURE_SAVED:")
+                || line.starts_with("ERR:")
+            {
+                if let Ok(mut guard) = state().lock() {
+                    if let Some(path) = line.strip_prefix("CAPTURE_SAVED:") {
+                        guard.last_capture = Some(path.to_string());
+                    } else {
+                        guard.signal = Some(line);
+                    }
+                }
+            }
+        }
+        // stdout 关闭 = 进程退出
+        if let Ok(mut guard) = state().lock() {
+            guard.exited = true;
+        }
+    });
+
+    // 后台线程：读取 stderr 并转发到 Rust log（info 级别，确保可见）
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().flatten() {
+            // 使用 log::info 确保在 dev run 时能看到
+            log::info!("[ios_camera_stream] {}", line);
+        }
+    });
+
+    // 存储 child 句柄
+    {
+        let mut guard = state().lock().map_err(|e| format!("锁错误: {}", e))?;
+        guard.child = Some(child);
+    }
+
+    // 5) 等待 STREAM_READY 信号（最多 8 秒）
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        {
+            let mut guard = state().lock().map_err(|e| format!("锁错误: {}", e))?;
+            if guard.exited {
+                let sig = guard.signal.clone().unwrap_or_default();
+                return Err(format!(
+                    "相机辅助进程意外退出。{}\n\
+                     可能原因：\n\
+                     1. macOS 未授予相机权限（系统设置 > 隐私与安全 > 相机）\n\
+                     2. 摄像头被其他应用占用",
+                    if sig.is_empty() { String::new() } else { format!(" 信号: {}", sig) }
+                ));
+            }
+            if let Some(sig) = &guard.signal {
+                if let Some(msg) = sig.strip_prefix("ERR:") {
+                    return Err(format!("内置摄像头启动失败: {}", msg));
+                }
+                if sig == "STREAM_READY" {
+                    guard.signal = None;
+                    return Ok("已使用 Mac 内置摄像头".to_string());
+                }
+            }
+        }
+        if Instant::now() > deadline {
+            return Err(
+                "连接超时（8 秒）。\n\n请检查：\n\
+                 1. 系统是否弹出了相机权限请求，请点击「允许」\n\
+                 2. 系统设置 > 隐私与安全 > 相机，确认大头贴已勾选"
                     .to_string(),
             );
         }

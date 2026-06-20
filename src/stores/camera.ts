@@ -7,6 +7,8 @@ export interface CameraState {
   running: boolean;
   deviceId: string;
   deviceName: string;
+  /** 是否使用 Mac 内置摄像头（而非 iPhone） */
+  useBuiltInCamera: boolean;
 }
 
 /**
@@ -19,6 +21,7 @@ export const useCameraStore = defineStore('camera', () => {
     running: false,
     deviceId: '',
     deviceName: '',
+    useBuiltInCamera: false,
   });
 
   /** 设备是否已连接且预览流正在运行 */
@@ -38,6 +41,7 @@ export const useCameraStore = defineStore('camera', () => {
       running: false,
       deviceId: '',
       deviceName: '',
+      useBuiltInCamera: false,
     };
   }
 

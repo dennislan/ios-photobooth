@@ -21,7 +21,7 @@ photobooth/
 | Task | File | Notes |
 |------|------|-------|
 | App entry | `src/main.ts` | Creates Vue app, mounts Pinia + Antd |
-| Root component | `src/App.vue` | 4-view router switching |
+| Root component | `src/App.vue` | 3-view router switching |
 | Camera state | `src/stores/camera.ts` | Connection state, deviceId |
 | Capture logic | `src/stores/capture.ts` | Photos, layout, filter, selection, print |
 | Tauri entry | `src-tauri/src/lib.rs` | Registers all commands |

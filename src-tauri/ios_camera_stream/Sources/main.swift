@@ -191,6 +191,11 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 // MARK: - 主逻辑
 @available(macOS 10.15, *)
 func main() {
+    // 从命令行参数获取设备 ID（可选）
+    // 有 device_id → iPhone 模式（仅使用 Continuity Camera / 外部设备）
+    // 无 device_id → 内置摄像头模式（直接使用 Mac 前置摄像头）
+    let targetDeviceId: String? = CommandLine.arguments.dropFirst().first
+
     // 创建保存目录
     let fileHandlerObj = FileHandler(directory: SAVE_DIR)
 
@@ -213,50 +218,73 @@ func main() {
         Thread.sleep(forTimeInterval: 2.0)
     }
 
-    // 构建设备类型：使用内置广角摄像头发现所有相机（含 Continuity Camera）
-    // 注：.external 是 macOS 14.0+ API，为兼容更低版本统一用 builtInWideAngleCamera，
-    // 再通过设备名称识别 iPhone (Continuity Camera)
-    let deviceTypes: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
+    // ── 模式 A：iPhone 模式（targetDeviceId 存在）──
+    if let _ = targetDeviceId {
+        // 使用 .external 类型发现 Continuity Camera (iPhone over USB/WiFi)
+        // 同时加入 .continuityCamera（macOS 15+）以覆盖更多场景
+        var deviceTypes: [AVCaptureDevice.DeviceType] = []
+        if #available(macOS 14.0, *) {
+            deviceTypes.append(.external)
+        }
+        if #available(macOS 15.0, *) {
+            deviceTypes.append(.continuityCamera)
+        }
 
-    let discovery = AVCaptureDevice.DiscoverySession(
-        deviceTypes: deviceTypes,
-        mediaType: .video,
-        position: .unspecified
-    )
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: deviceTypes,
+            mediaType: .video,
+            position: .unspecified
+        )
 
-    // Continuity Camera 可能需要几秒才被发现，轮询等待
-    var captureDevice: AVCaptureDevice? = nil
-    for _ in 0..<15 {
-        let devices = discovery.devices
-        // 优先级 1: iPhone (Continuity Camera，设备名通常含 "iphone")
-        captureDevice = devices.first { d in
-            d.localizedName.lowercased().contains("iphone")
+        // 查找可用的外部摄像头设备。
+        // 注意：Continuity Camera 的设备名为 "{iPhone名称} Camera"（例如 "MyiPhone Camera"
+        // 或 "馬到成功 Camera"），不一定包含 "iphone" 字样，所以不再按名称过滤。
+        // .external / .continuityCamera 类型本身已保证是 iPhone 连续互通相机。
+        var captureDevice: AVCaptureDevice? = nil
+        for _ in 0..<15 {
+            let devices = discovery.devices
+            if !devices.isEmpty {
+                captureDevice = devices.first
+            }
+            if captureDevice != nil { break }
+            Thread.sleep(forTimeInterval: 0.5)
         }
-        // 优先级 2: macOS 14.0+ 的 .external 类型设备
-        if captureDevice == nil, #available(macOS 14.0, *) {
-            captureDevice = devices.first { $0.deviceType == .external }
+
+        guard let device = captureDevice else {
+            print("ERR:未检测到 iPhone 相机。你的 iPhone 通过 USB 连接（libimobiledevice 可见），但 AVFoundation 未识别为此设备。请确认：1) iPhone 已解锁并亮屏 2) 系统设置 > 隐私与安全 > 相机 已授权本应用 3) iPhone 上：控制中心 > 屏幕镜像 > 选择本机开启连续互通相机")
+            fflush(stdout)
+            Thread.sleep(forTimeInterval: 0.3)
+            exit(1)
         }
-        // 优先级 3: 内置前置摄像头 (fallback)
-        if captureDevice == nil {
-            captureDevice = devices.first { $0.position == .front }
-        }
-        // 优先级 4: 任意可用设备
-        if captureDevice == nil {
-            captureDevice = devices.first
-        }
-        if captureDevice != nil { break }
-        Thread.sleep(forTimeInterval: 0.5)
+
+        fputs("Using iPhone camera (Continuity): \(device.localizedName)\n", stderr)
+
+        // 后续初始化与之前一致
+        trySetupAndStream(session: session, device: device, streamer: streamer, fileHandler: fileHandlerObj)
     }
+    // ── 模式 B：内置摄像头（无 device_id）──
+    else {
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera],
+            mediaType: .video,
+            position: .front
+        )
 
-    guard let device = captureDevice else {
-        print("ERR:未发现任何摄像头。请确认:1) iPhone 已通过 USB 连接并解锁;2) iPhone 与 Mac 登录同一 Apple ID;3) 在 iPhone「控制中心」启用「连续互通相机」。")
-        fflush(stdout)
-        Thread.sleep(forTimeInterval: 0.3)
-        exit(1)
+        guard let device = discovery.devices.first else {
+            print("ERR:未发现内置摄像头。")
+            fflush(stdout)
+            Thread.sleep(forTimeInterval: 0.3)
+            exit(1)
+        }
+
+        fputs("Using built-in camera: \(device.localizedName)\n", stderr)
+        trySetupAndStream(session: session, device: device, streamer: streamer, fileHandler: fileHandlerObj)
     }
+}
 
-    fputs("Using camera: \(device.localizedName)\n", stderr)
-
+// MARK: - 通用初始化与流启动
+@available(macOS 10.15, *)
+func trySetupAndStream(session: AVCaptureSession, device: AVCaptureDevice, streamer: MJPEGStreamer, fileHandler: FileHandler) {
     guard let videoInput = try? AVCaptureDeviceInput(device: device) else {
         print("ERR:无法创建视频输入，摄像头可能被其他应用占用。")
         fflush(stdout)
@@ -302,12 +330,11 @@ func main() {
 
         if command == "capture" {
             if #available(macOS 10.15, *) {
-                // Request JPEG format explicitly for reliable downstream processing
                 let settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
                 settings.isHighResolutionPhotoEnabled = false
                 photoOutput.capturePhoto(with: settings, delegate: PhotoCaptureDelegate(
                     saveDir: SAVE_DIR,
-                    fileHandler: fileHandlerObj
+                    fileHandler: fileHandler
                 ))
             }
         } else if command == "quit" {

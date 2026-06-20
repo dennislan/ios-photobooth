@@ -12,15 +12,34 @@ mod printer;
 mod stream;
 mod utils;
 
+// ── 日志初始化 ──
+
+fn init_logging() {
+    // 开发模式下使用 env_logger，输出到 stderr（Tauri dev 终端可见）
+    #[cfg(debug_assertions)]
+    {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Debug)
+            .is_test(true)
+            .try_init();
+    }
+}
+
 // ── 设备发现 ──
 
 #[tauri::command]
 async fn discover_devices() -> Result<Vec<String>, String> {
-    camera::list_devices().await
+    let result = camera::list_devices().await;
+    match &result {
+        Ok(devs) => eprintln!("[photobooth] discover_devices: OK — {} 台设备", devs.len()),
+        Err(msg) => eprintln!("[photobooth] discover_devices: FAIL — {}", msg),
+    }
+    result
 }
 
 #[tauri::command]
 async fn get_device_info(device_id: String) -> Result<camera::DeviceInfo, String> {
+    eprintln!("[photobooth] get_device_info: {}", &device_id[..device_id.len().min(8)]);
     camera::device_info(&device_id).await
 }
 
@@ -28,7 +47,24 @@ async fn get_device_info(device_id: String) -> Result<camera::DeviceInfo, String
 
 #[tauri::command]
 async fn start_camera(device_id: String) -> Result<String, String> {
-    stream::start(device_id).await
+    eprintln!("[photobooth] start_camera: device_id={}", &device_id[..device_id.len().min(8)]);
+    let result = stream::start(device_id).await;
+    match &result {
+        Ok(msg) => eprintln!("[photobooth] start_camera: OK — {}", msg),
+        Err(msg) => eprintln!("[photobooth] start_camera: FAIL — {}", msg),
+    }
+    result
+}
+
+#[tauri::command]
+async fn start_builtin_camera() -> Result<String, String> {
+    eprintln!("[photobooth] start_builtin_camera: 启动内置摄像头");
+    let result = stream::start_builtin().await;
+    match &result {
+        Ok(msg) => eprintln!("[photobooth] start_builtin_camera: OK — {}", msg),
+        Err(msg) => eprintln!("[photobooth] start_builtin_camera: FAIL — {}", msg),
+    }
+    result
 }
 
 #[tauri::command]
@@ -43,8 +79,10 @@ async fn is_camera_active() -> Result<bool, String> {
 
 #[tauri::command]
 async fn capture_photo(device_id: String) -> Result<String, String> {
-    // 验证设备可达且已配对
-    let _ = tokio::task::block_in_place(|| camera::verify_device(&device_id))?;
+    // 仅在提供了 device_id 时验证（内置摄像头模式下 device_id 为空）
+    if !device_id.is_empty() {
+        let _ = tokio::task::block_in_place(|| camera::verify_device(&device_id))?;
+    }
     // 通过 stdin 发送 capture 指令，等待真实文件路径
     stream::capture_photo().await
 }
@@ -148,6 +186,8 @@ async fn diagnose_connection() -> Result<serde_json::Value, String> {
 // ── 应用入口 ──
 
 pub fn main() {
+    // 初始化日志
+    init_logging();
     // 补全 PATH（GUI 应用从 Finder 启动时 PATH 不含 Homebrew 路径）
     utils::setup_environment();
 
@@ -156,6 +196,7 @@ pub fn main() {
             discover_devices,
             get_device_info,
             start_camera,
+            start_builtin_camera,
             stop_camera,
             is_camera_active,
             capture_photo,

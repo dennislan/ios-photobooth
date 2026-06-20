@@ -191,10 +191,16 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 // MARK: - 主逻辑
 @available(macOS 10.15, *)
 func main() {
-    // 从命令行参数获取设备 ID（可选）
+    // 从命令行参数获取设备 ID 和设备名称（均可选）
     // 有 device_id → iPhone 模式（仅使用 Continuity Camera / 外部设备）
     // 无 device_id → 内置摄像头模式（直接使用 Mac 前置摄像头）
-    let targetDeviceId: String? = CommandLine.arguments.dropFirst().first
+    //
+    // 参数约定（由 Rust stream.rs 传入）：
+    //   argv[1] = device_id   (libimobiledevice UDID，用于区分有无 iPhone)
+    //   argv[2] = device_name (ideviceinfo -k DeviceName，用于匹配 AVFoundation 设备)
+    let cmdArgs = CommandLine.arguments.dropFirst()
+    let targetDeviceId: String? = cmdArgs.first
+    let targetDeviceName: String? = cmdArgs.dropFirst().first
 
     // 创建保存目录
     let fileHandlerObj = FileHandler(directory: SAVE_DIR)
@@ -219,7 +225,7 @@ func main() {
     }
 
     // ── 模式 A：iPhone 模式（targetDeviceId 存在）──
-    if let _ = targetDeviceId {
+    if targetDeviceId != nil {
         // 使用 .external 类型发现 Continuity Camera (iPhone over USB/WiFi)
         // 同时加入 .continuityCamera（macOS 15+）以覆盖更多场景
         var deviceTypes: [AVCaptureDevice.DeviceType] = []
@@ -236,28 +242,45 @@ func main() {
             position: .unspecified
         )
 
-        // 查找可用的外部摄像头设备。
-        // 注意：Continuity Camera 的设备名为 "{iPhone名称} Camera"（例如 "MyiPhone Camera"
-        // 或 "馬到成功 Camera"），不一定包含 "iphone" 字样，所以不再按名称过滤。
-        // .external / .continuityCamera 类型本身已保证是 iPhone 连续互通相机。
+        // 期望匹配的设备名称（来自 ideviceinfo -k DeviceName）。
+        // Continuity Camera 在 AVFoundation 中的 localizedName 通常为 "{DeviceName} Camera"。
+        let expectedName = targetDeviceName ?? ""
+
+        // 查找匹配的 Continuity Camera 设备。
+        // 如果有 expectedName，按名称匹配；否则退化为取第一个。
         var captureDevice: AVCaptureDevice? = nil
+        var discoveredNames: [String] = []
         for _ in 0..<15 {
             let devices = discovery.devices
             if !devices.isEmpty {
-                captureDevice = devices.first
+                discoveredNames = devices.map { $0.localizedName }
+                if expectedName.isEmpty {
+                    captureDevice = devices.first
+                } else {
+                    // 按设备名匹配：Continuity Camera 的 localizedName 为 "{DeviceName} Camera"
+                    captureDevice = devices.first { device in
+                        let name = device.localizedName
+                        return name == "\(expectedName) Camera"
+                            || name == expectedName
+                            || name.hasPrefix("\(expectedName)")
+                    }
+                }
             }
             if captureDevice != nil { break }
             Thread.sleep(forTimeInterval: 0.5)
         }
 
         guard let device = captureDevice else {
-            print("ERR:未检测到 iPhone 相机。你的 iPhone 通过 USB 连接（libimobiledevice 可见），但 AVFoundation 未识别为此设备。请确认：1) iPhone 已解锁并亮屏 2) 系统设置 > 隐私与安全 > 相机 已授权本应用 3) iPhone 上：控制中心 > 屏幕镜像 > 选择本机开启连续互通相机")
+            let foundList = discoveredNames.isEmpty
+                ? "无"
+                : discoveredNames.joined(separator: ", ")
+            print("ERR:未检测到匹配的 iPhone 相机。期望设备「\(expectedName)」，AVFoundation 发现: \(foundList)。请确认：1) iPhone 已解锁并亮屏 2) 系统设置 > 隐私与安全 > 相机 已授权本应用 3) iPhone 上：控制中心 > 屏幕镜像 > 选择本机开启连续互通相机")
             fflush(stdout)
             Thread.sleep(forTimeInterval: 0.3)
             exit(1)
         }
 
-        fputs("Using iPhone camera (Continuity): \(device.localizedName)\n", stderr)
+        fputs("Using iPhone camera (Continuity): \(device.localizedName) (expected: \(expectedName))\n", stderr)
 
         // 后续初始化与之前一致
         trySetupAndStream(session: session, device: device, streamer: streamer, fileHandler: fileHandlerObj)

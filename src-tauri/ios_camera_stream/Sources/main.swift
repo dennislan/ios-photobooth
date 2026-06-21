@@ -191,6 +191,10 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 // MARK: - 主逻辑
 @available(macOS 10.15, *)
 func main() {
+    // 版本标识 — Rust 端据此检测 helper 版本，拒绝旧版二进制
+    print("HELPER_V2")
+    fflush(stdout)
+
     // 从命令行参数获取设备 ID 和设备名称（均可选）
     // 有 device_id → iPhone 模式（仅使用 Continuity Camera / 外部设备）
     // 无 device_id → 内置摄像头模式（直接使用 Mac 前置摄像头）
@@ -282,6 +286,10 @@ func main() {
 
         fputs("Using iPhone camera (Continuity): \(device.localizedName) (expected: \(expectedName))\n", stderr)
 
+        // 向 Rust 报告实际选中的设备名，供其验证是否与期望设备匹配
+        print("DEVICE_SELECTED:\(device.localizedName)")
+        fflush(stdout)
+
         // 后续初始化与之前一致
         trySetupAndStream(session: session, device: device, streamer: streamer, fileHandler: fileHandlerObj)
     }
@@ -301,6 +309,11 @@ func main() {
         }
 
         fputs("Using built-in camera: \(device.localizedName)\n", stderr)
+
+        // 向 Rust 报告实际选中的设备名
+        print("DEVICE_SELECTED:\(device.localizedName)")
+        fflush(stdout)
+
         trySetupAndStream(session: session, device: device, streamer: streamer, fileHandler: fileHandlerObj)
     }
 }

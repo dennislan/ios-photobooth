@@ -20,6 +20,10 @@ struct StreamState {
     signal: Option<String>,
     /// helper 是否已退出
     exited: bool,
+    /// helper 是否输出了 HELPER_V2 版本标识
+    helper_v2: bool,
+    /// helper 实际选中的设备名（来自 DEVICE_SELECTED 信号）
+    selected_device: Option<String>,
 }
 
 static STREAM: OnceLock<Mutex<StreamState>> = OnceLock::new();
@@ -32,12 +36,33 @@ fn state() -> &'static Mutex<StreamState> {
             last_capture: None,
             signal: None,
             exited: false,
+            helper_v2: false,
+            selected_device: None,
         })
     })
 }
 
 /// MJPEG 预览端口（与 Swift helper 中一致）
 const MJPEG_PORT: u16 = 27183;
+
+/// 判断 AVFoundation 报告的设备名是否与 libimobiledevice 报告的设备名匹配。
+///
+/// - `selected`：AVFoundation 的 `device.localizedName`，通常为 "{iPhone名称} Camera"
+/// - `expected`：libimobiledevice 的 `ideviceinfo -k DeviceName`，例如 "Lan的iPhone"
+fn device_matches(selected: &str, expected: &str) -> bool {
+    if selected == expected {
+        return true;
+    }
+    // Continuity Camera 的 localizedName 通常为 "{DeviceName} Camera"
+    if selected == format!("{} Camera", expected) {
+        return true;
+    }
+    // 宽松匹配：selected 包含 expected（处理 "Lan的iPhone Camera" 包含 "Lan的iPhone" 的情况）
+    if selected.contains(expected) {
+        return true;
+    }
+    false
+}
 
 /// 启动相机预览流
 ///
@@ -67,6 +92,8 @@ pub async fn start(device_id: String) -> Result<String, String> {
         guard.signal = None;
         guard.exited = false;
         guard.last_capture = None;
+        guard.helper_v2 = false;
+        guard.selected_device = None;
     }
 
     // 5) 启动 helper 子进程（传入 device_id 和 device_name）
@@ -111,10 +138,16 @@ pub async fn start(device_id: String) -> Result<String, String> {
             if line.starts_with("STREAM_READY")
                 || line.starts_with("CAPTURE_SAVED:")
                 || line.starts_with("ERR:")
+                || line == "HELPER_V2"
+                || line.starts_with("DEVICE_SELECTED:")
             {
                 if let Ok(mut guard) = state().lock() {
                     if let Some(path) = line.strip_prefix("CAPTURE_SAVED:") {
                         guard.last_capture = Some(path.to_string());
+                    } else if line == "HELPER_V2" {
+                        guard.helper_v2 = true;
+                    } else if let Some(name) = line.strip_prefix("DEVICE_SELECTED:") {
+                        guard.selected_device = Some(name.to_string());
                     } else {
                         guard.signal = Some(line);
                     }
@@ -163,7 +196,34 @@ pub async fn start(device_id: String) -> Result<String, String> {
                     return Err(format!("相机启动失败: {}", msg));
                 }
                 if sig == "STREAM_READY" {
-                    guard.signal = None;
+                    // ── 检查 helper 版本 ──
+                    if !guard.helper_v2 {
+                        drop(guard);
+                        stop_internal();
+                        return Err(
+                            "相机辅助工具版本过旧，未输出 HELPER_V2 信号。\n\
+                             请重新运行 ./build.sh 构建最新版本的 Swift helper。"
+                                .to_string(),
+                        );
+                    }
+
+                    // ── 验证实际选中的设备是否与期望匹配 ──
+                    let selected = guard.selected_device.clone();
+                    drop(guard);
+                    if let Some(ref sel) = selected {
+                        if !device_name.is_empty() && !device_matches(sel, &device_name) {
+                            stop_internal();
+                            return Err(format!(
+                                "设备不匹配：USB 连接的是「{}」，但相机实际连接的是「{}」。\n\
+                                 请确认：\n\
+                                 1. Continuity Camera 是否已连接到正确的 iPhone\n\
+                                 2. 在 iPhone 上：控制中心 > 屏幕镜像 > 选择本机开启连续互通相机\n\
+                                 3. iPhone 和 Mac 需登录同一 Apple ID",
+                                device_name, sel
+                            ));
+                        }
+                    }
+
                     return Ok(format!(
                         "已连接到 iPhone: {} ({})",
                         device_name,
@@ -251,10 +311,16 @@ pub async fn start_builtin() -> Result<String, String> {
             if line.starts_with("STREAM_READY")
                 || line.starts_with("CAPTURE_SAVED:")
                 || line.starts_with("ERR:")
+                || line == "HELPER_V2"
+                || line.starts_with("DEVICE_SELECTED:")
             {
                 if let Ok(mut guard) = state().lock() {
                     if let Some(path) = line.strip_prefix("CAPTURE_SAVED:") {
                         guard.last_capture = Some(path.to_string());
+                    } else if line == "HELPER_V2" {
+                        guard.helper_v2 = true;
+                    } else if let Some(name) = line.strip_prefix("DEVICE_SELECTED:") {
+                        guard.selected_device = Some(name.to_string());
                     } else {
                         guard.signal = Some(line);
                     }
@@ -302,6 +368,16 @@ pub async fn start_builtin() -> Result<String, String> {
                     return Err(format!("内置摄像头启动失败: {}", msg));
                 }
                 if sig == "STREAM_READY" {
+                    // 检查 helper 版本
+                    if !guard.helper_v2 {
+                        drop(guard);
+                        stop_internal();
+                        return Err(
+                            "相机辅助工具版本过旧，未输出 HELPER_V2 信号。\n\
+                             请重新运行 ./build.sh 构建最新版本的 Swift helper。"
+                                .to_string(),
+                        );
+                    }
                     guard.signal = None;
                     return Ok("已使用 Mac 内置摄像头".to_string());
                 }

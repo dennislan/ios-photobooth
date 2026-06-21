@@ -99,6 +99,7 @@ pub async fn start(device_id: String) -> Result<String, String> {
     // 5) 启动 helper 子进程（传入 device_id 和 device_name）
     //    device_name 用于 Swift 侧匹配 AVFoundation Continuity Camera 设备，
     //    避免 libimobiledevice (USB) 与 AVFoundation (Continuity) 两套标识体系脱节。
+    log::info!("[stream] 启动 helper: path={} device_id={} device_name={}", helper_path, &device_id[..device_id.len().min(8)], device_name);
     let mut child = task::block_in_place(|| -> Result<Child, String> {
         Command::new(&helper_path)
             .arg(&device_id)
@@ -135,6 +136,8 @@ pub async fn start(device_id: String) -> Result<String, String> {
         let reader = BufReader::new(stdout);
         for line in reader.lines().flatten() {
             let line = line.trim().to_string();
+            // 记录所有 stdout 行，便于诊断
+            log::info!("[helper:stdout] {}", line);
             if line.starts_with("STREAM_READY")
                 || line.starts_with("CAPTURE_SAVED:")
                 || line.starts_with("ERR:")
@@ -145,16 +148,20 @@ pub async fn start(device_id: String) -> Result<String, String> {
                     if let Some(path) = line.strip_prefix("CAPTURE_SAVED:") {
                         guard.last_capture = Some(path.to_string());
                     } else if line == "HELPER_V2" {
+                        log::info!("[stream] 收到 HELPER_V2 信号 — helper 版本正确");
                         guard.helper_v2 = true;
                     } else if let Some(name) = line.strip_prefix("DEVICE_SELECTED:") {
+                        log::info!("[stream] 实际选中设备: {}", name);
                         guard.selected_device = Some(name.to_string());
                     } else {
+                        log::info!("[stream] 收到信号: {}", line);
                         guard.signal = Some(line);
                     }
                 }
             }
         }
         // stdout 关闭 = 进程退出
+        log::info!("[stream] helper stdout 已关闭（进程退出）");
         if let Ok(mut guard) = state().lock() {
             guard.exited = true;
         }
@@ -198,20 +205,24 @@ pub async fn start(device_id: String) -> Result<String, String> {
                 if sig == "STREAM_READY" {
                     // ── 检查 helper 版本 ──
                     if !guard.helper_v2 {
+                        log::warn!("[stream] HELPER_V2 信号缺失！helper 二进制可能过旧。helper_path={}", helper_path);
                         drop(guard);
                         stop_internal();
-                        return Err(
+                        return Err(format!(
                             "相机辅助工具版本过旧，未输出 HELPER_V2 信号。\n\
-                             请重新运行 ./build.sh 构建最新版本的 Swift helper。"
-                                .to_string(),
-                        );
+                             helper 路径: {}\n\
+                             请重新运行 cargo build 或 ./build.sh 构建最新版本的 Swift helper。",
+                            helper_path
+                        ));
                     }
 
                     // ── 验证实际选中的设备是否与期望匹配 ──
                     let selected = guard.selected_device.clone();
                     drop(guard);
                     if let Some(ref sel) = selected {
+                        log::info!("[stream] 设备匹配检查: expected={} selected={}", device_name, sel);
                         if !device_name.is_empty() && !device_matches(sel, &device_name) {
+                            log::warn!("[stream] 设备不匹配！expected={} selected={}", device_name, sel);
                             stop_internal();
                             return Err(format!(
                                 "设备不匹配：USB 连接的是「{}」，但相机实际连接的是「{}」。\n\
@@ -222,8 +233,12 @@ pub async fn start(device_id: String) -> Result<String, String> {
                                 device_name, sel
                             ));
                         }
+                        log::info!("[stream] 设备匹配成功 ✓");
+                    } else {
+                        log::warn!("[stream] 未收到 DEVICE_SELECTED 信号，跳过设备匹配检查");
                     }
 
+                    log::info!("[stream] 相机连接成功: {} ({})", device_name, &device_id[..device_id.len().min(8)]);
                     return Ok(format!(
                         "已连接到 iPhone: {} ({})",
                         device_name,
@@ -274,6 +289,7 @@ pub async fn start_builtin() -> Result<String, String> {
     }
 
     // 4) 启动 helper 子进程（不传 device_id → Swift 自动选择内置摄像头）
+    log::info!("[stream] 启动 helper (内置摄像头模式): path={}", helper_path);
     let mut child = task::block_in_place(|| -> Result<Child, String> {
         Command::new(&helper_path)
             .stdin(Stdio::piped())
@@ -308,6 +324,8 @@ pub async fn start_builtin() -> Result<String, String> {
         let reader = BufReader::new(stdout);
         for line in reader.lines().flatten() {
             let line = line.trim().to_string();
+            // 记录所有 stdout 行，便于诊断
+            log::info!("[helper:stdout] {}", line);
             if line.starts_with("STREAM_READY")
                 || line.starts_with("CAPTURE_SAVED:")
                 || line.starts_with("ERR:")
@@ -318,16 +336,20 @@ pub async fn start_builtin() -> Result<String, String> {
                     if let Some(path) = line.strip_prefix("CAPTURE_SAVED:") {
                         guard.last_capture = Some(path.to_string());
                     } else if line == "HELPER_V2" {
+                        log::info!("[stream] 收到 HELPER_V2 信号 — helper 版本正确");
                         guard.helper_v2 = true;
                     } else if let Some(name) = line.strip_prefix("DEVICE_SELECTED:") {
+                        log::info!("[stream] 实际选中设备: {}", name);
                         guard.selected_device = Some(name.to_string());
                     } else {
+                        log::info!("[stream] 收到信号: {}", line);
                         guard.signal = Some(line);
                     }
                 }
             }
         }
         // stdout 关闭 = 进程退出
+        log::info!("[stream] helper stdout 已关闭（进程退出）");
         if let Ok(mut guard) = state().lock() {
             guard.exited = true;
         }
@@ -370,14 +392,17 @@ pub async fn start_builtin() -> Result<String, String> {
                 if sig == "STREAM_READY" {
                     // 检查 helper 版本
                     if !guard.helper_v2 {
+                        log::warn!("[stream] HELPER_V2 信号缺失！helper 二进制可能过旧。helper_path={}", helper_path);
                         drop(guard);
                         stop_internal();
-                        return Err(
+                        return Err(format!(
                             "相机辅助工具版本过旧，未输出 HELPER_V2 信号。\n\
-                             请重新运行 ./build.sh 构建最新版本的 Swift helper。"
-                                .to_string(),
-                        );
+                             helper 路径: {}\n\
+                             请重新运行 cargo build 或 ./build.sh 构建最新版本的 Swift helper。",
+                            helper_path
+                        ));
                     }
+                    log::info!("[stream] 内置摄像头连接成功");
                     guard.signal = None;
                     return Ok("已使用 Mac 内置摄像头".to_string());
                 }
